@@ -1,0 +1,6 @@
+*.nb
+*.pptx
+*.pdf
+*.docx
+*.xlsx
+code/.ipynb_checkpoints/*
