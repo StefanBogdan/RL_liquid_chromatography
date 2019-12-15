@@ -3,4 +3,5 @@
 *.pdf
 *.docx
 *.xlsx
-code/.ipynb_checkpoints/*
+code/.ipynb_checkpoints
+code/__pycache__
