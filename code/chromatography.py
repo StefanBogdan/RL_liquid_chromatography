@@ -4,6 +4,7 @@
 """
 import numpy as np
 from scipy.special import erf
+import matplotlib.pyplot as plt
 
 
 def placement_error(analytes_pl, true_pl=None):
@@ -144,9 +145,12 @@ class ExperimentAnalytes(object):
         else:
             self.run_time = run_time
             
-        self.time_travel = np.zeros(k0.shape)
-        self.positions = np.zeros(k0.shape)
+        self.time_travel = [np.zeros(k0.shape)]
+        self.positions = [np.zeros(k0.shape)]
         self.final_position = 1/(1 + 2 * h ** 0.5)
+        self.phis = []
+        self.delta_taus = []
+        self.done = False
         
         if grad == 'iso':
             self.x = self.x_iso
@@ -158,6 +162,18 @@ class ExperimentAnalytes(object):
             self.step = self.step_linear
         else:
             raise ValueError(f"'grad' can have only these values ['iso', 'linear'], given '{grad}'")
+            
+        self.grad = grad
+            
+    
+    def __str__(self):
+        return (
+            f"k0: {self.k0}\nS: {self.S}\nh: {self.h}\n" + 
+            f"run_time: {self.run_time}\nLast time_travel: {self.time_travel[-1]}\n" +
+            f"Last positions: {self.positions[-1]}\nfinal_position: {self.final_position}\n" +
+            f"grad: {self.grad}\nphis: {self.phis}\ndelta_taus: {self.delta_taus}\n" +
+            f"done: {self.done}"
+        )
     
         
     def k(self, phi):
@@ -174,7 +190,7 @@ class ExperimentAnalytes(object):
         Compute second Gaussian moment for the analytes.
         """
         
-        return np.sqrt((self.position**2) * self.h)
+        return self.position * np.sqrt(self.h)
     
     
     def intersection_time_iso(self, phi, delta_tau_phi):
@@ -201,33 +217,47 @@ class ExperimentAnalytes(object):
         Update Distance and Time traveled by each analyte.
         Isocratic gradient function.
         """
-        # Compute the interval of time needed to intersect with the next phi.
-        intersection_tau = self.intersection_time(phi, delta_tau_phi)
-        # Compute the distance Traveled until the intersection.
-        delta_x = self.x(phi, intersection_tau)
 
-        over_x_lim = (self.positions + delta_x > self.final_position)
-        #print(f'Over X:{over_x_lim.any()}')
+
+        # If all analytes traveled the run_time there is nothing else to do
+        if self.done:
+            return True
+
+        # Add gradient and delta tau to the to the list of gradients
+        # and  delta taus respectively
+        self.phis.append(phi)
+        self.delta_taus.append(delta_tau_phi)
+        # Compute the interval of time needed to intersect with the next phi.
+        intersect_time = self.intersection_time(phi, delta_tau_phi)
+        # Compute the distance Traveled until the intersection.
+        delta_x = self.x(phi, intersect_time)
+
+        over_x_lim = (self.positions[-1] + delta_x > self.final_position)
+        
         if over_x_lim.any():
-            max_time = (self.time_travel[over_x_lim] + \
-                        (self.final_position - self.positions[over_x_lim]) * \
+            max_time = (self.time_travel[-1][over_x_lim] + \
+                        (self.final_position - self.positions[-1][over_x_lim]) * \
                         (self.k(phi)[over_x_lim] + 1)).min()
-            
             if self.run_time:
                 self.run_time = np.min([self.run_time, max_time])
             else:
                 self.run_time = max_time
-        #print(f'Run Time:{self.run_time}')
+
         if self.run_time:
-            over_time = (self.time_travel + intersection_tau > self.run_time)
+            over_time = (self.time_travel[-1] + intersect_time > self.run_time)
             if over_time.any():
-                intersection_tau[over_time] = self.run_time - self.time_travel[over_time]
-        #print(f'Time:{intersection_tau}\n')
-        # Update time travel and position.
-        self.time_travel += intersection_tau
-        self.positions += self.x_iso(phi, intersection_tau)
+                intersect_time[over_time] = self.run_time - self.time_travel[-1][over_time]
+            # if all analytes are over time then all are done:
+            if over_time.all():
+                self.done = True
+
+        # Append new time travel and position.
+        self.time_travel.append(self.time_travel[-1] + intersect_time) 
+        self.positions.append(self.positions[-1] + self.x_iso(phi, intersect_time))
+
         
-        return self.time_travel, self.positions
+        
+        return self.done
 
     
     def intersection_time_linear(self, phi_init, phi_final, delta_tau_phi):
@@ -255,4 +285,59 @@ class ExperimentAnalytes(object):
         Update Distance and Time traveled by each analyte.
         Isocratic gradient function.
         """
+
+        
         pass
+
+
+    def print_analytes(self, title="Solvent Gradient Function", angle=50,rc=(13, 10)):
+        """
+        Plot the dinamics of the analytes for the experiment.
+        """
+
+        plt.rcParams['figure.figsize'] = rc
+        plt.rcParams['axes.facecolor'] = 'whitesmoke'
+
+        # print limit of x
+        plt.axhline(y=self.final_position, color='r', linestyle='--')
+
+        # coordinated for the gradient velocity
+        u = np.linspace(0.0, self.final_position + 0.2, 100)
+
+        # Start time of the first gradient
+        tau = 0
+
+        for i in range(len(self.time_travel) - 1):
+            # This is for each segment in the solvent gradient to be different
+            # Good for debuging
+            if i % 2:
+                col = 'r'
+            else:
+                col = 'b'
+            # Plot the volocity of the solvent
+            plt.plot(u + tau, u, linestyle='--', c='k')
+            
+            # Add the solvent gradient on the line
+            l2 = np.array(((u+tau)[-15] - 0.02, u[-15]))
+            th2 = plt.text(
+                l2[0],
+                l2[1],
+                f"phi = {self.phis[i]}",
+                fontsize=12,
+                rotation=angle,
+                rotation_mode='anchor'
+                )
+            tau += self.delta_taus[i]
+
+            for a in range(len(self.time_travel[i])):
+                plt.plot(
+                    np.linspace(self.time_travel[i][a], self.time_travel[i+1][a], 100),
+                    np.linspace(self.positions[i][a], self.positions[i+1][a], 100),  
+                    c=col
+                    )
+
+            # Add Title and axes
+            plt.title(title)
+            plt.xlabel('Tau, [dimensionless]')
+            plt.ylabel('Position, [dimensionless]')
+            plt.grid(True)
