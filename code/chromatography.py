@@ -3,8 +3,28 @@
     liquid chromatography.
 """
 import numpy as np
+import torch 
+import torch.nn as nn
+from torch.distributions.normal import Normal
+from torch.distributions.multivariate_normal import MultivariateNormal
 from scipy.special import erf
 import matplotlib.pyplot as plt
+
+
+def log_prob(value, mu, sigma):
+    """
+    Compute Log Probability for the Normal distribution.
+    """
+
+    if value.numel() == 1:
+        var = sigma ** 2
+        log_scale = sigma.log()
+        return -((value - mu) ** 2) / (2 * var) - log_scale - np.log(np.sqrt(2 * np.pi))
+    else:
+        return (
+            MultivariateNormal(mu, torch.diag(sigma))
+            .log_prob(value)
+            )
 
 
 def placement_error(analytes_pl, true_pl=None):
@@ -28,7 +48,7 @@ def placement_error(analytes_pl, true_pl=None):
     if not true_pl:
         true_pl = np.arange(1, list_len + 1)/list_len
        
-    return 2 * np.abs(analytes_pl - true_pl).sum() / (list_len - 1)
+    return 2 * np.abs(np.sort(analytes_pl) - true_pl).sum() / list_len
 
 def cdf(x, mu, sigma):
     """
@@ -140,10 +160,11 @@ class ExperimentAnalytes(object):
         self.k0 = k0
         self.S = S
         self.h = float(h)
+        self.run_time_init = run_time
         if run_time:
             self.run_time = float(run_time)
         else:
-            self.run_time = run_time
+            self.run_time = None
             
         self.time_travel = [np.zeros(k0.shape)]
         self.positions = [np.zeros(k0.shape)]
@@ -164,6 +185,26 @@ class ExperimentAnalytes(object):
             raise ValueError(f"'grad' can have only these values ['iso', 'linear'], given '{grad}'")
             
         self.grad = grad
+
+    def reset(self):
+        """
+            Reset to default settings.
+        """
+
+        if self.run_time_init:
+            self.run_time = float(self.run_time_init)
+        else:
+            self.run_time = None
+
+        self.time_travel = [np.zeros(self.k0.shape)]
+        self.positions = [np.zeros(self.k0.shape)]
+        self.phis = []
+        self.delta_taus = []
+        self.done = False
+
+
+    def loss(self):
+        return placement_error(self.positions[-1]) + overlap_error(self.positions[-1], self.sig)
             
     
     def __str__(self):
@@ -190,7 +231,7 @@ class ExperimentAnalytes(object):
         Compute second Gaussian moment for the analytes.
         """
         
-        return self.position * np.sqrt(self.h)
+        return self.positions[-1] * np.sqrt(self.h)
     
     
     def intersection_time_iso(self, phi, delta_tau_phi):
@@ -290,7 +331,7 @@ class ExperimentAnalytes(object):
         pass
 
 
-    def print_analytes(self, title="Solvent Gradient Function", angle=50,rc=(13, 10)):
+    def print_analytes(self, title="Solvent Gradient Function", angle=50, rc=(13, 10)):
         """
         Plot the dinamics of the analytes for the experiment.
         """
@@ -341,3 +382,15 @@ class ExperimentAnalytes(object):
             plt.xlabel('Tau, [dimensionless]')
             plt.ylabel('Position, [dimensionless]')
             plt.grid(True)
+
+
+    def run_all(self, phis, delta_taus):
+        """
+            
+        """
+        
+        if len(phis) != len(delta_taus):
+            raise ValueError(f"Input parametrs does not match length!{len(phis)}:{len(delta_taus)}")
+        
+        for phi, delta_tau in zip(phis, delta_taus):
+            self.step(phi, delta_tau)
