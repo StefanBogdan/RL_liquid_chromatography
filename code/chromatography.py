@@ -5,21 +5,42 @@
 import numpy as np
 import torch 
 import torch.nn as nn
+from torch import optim, tensor
 from torch.distributions.normal import Normal
 from torch.distributions.multivariate_normal import MultivariateNormal
 from scipy.special import erf
 import matplotlib.pyplot as plt
 
 
-def log_prob(value, mu, sigma):
+def log_prob(
+        value: torch.Tensor, 
+        mu: torch.Tensor, 
+        sigma: torch.Tensor
+    ) -> torch.Tensor:
     """
     Compute Log Probability for the Normal distribution.
+
+    Parameters
+    ----------
+    value: torch.Tensor
+        tensor of sampled values from the Multivariate/Normal distribution.
+    mu: torch.Tensor
+        tensor of means of Multivariate/Normal distribution.
+    sigma: torch.Tensor
+        tensor of standars deviations of Multivariate/Normal distribution.
+
+    Returns
+    -------
+    torch.Tensor
+        log probability of the given value being sampled from the
+        Multivariate/Normal distribution. (one element tensor)
     """
 
     if value.numel() == 1:
-        var = sigma ** 2
-        log_scale = sigma.log()
-        return -((value - mu) ** 2) / (2 * var) - log_scale - np.log(np.sqrt(2 * np.pi))
+        return (
+            Normal(mu, sigma)
+            .log_prob(value)
+            )
     else:
         return (
             MultivariateNormal(mu, torch.diag(sigma))
@@ -27,63 +48,71 @@ def log_prob(value, mu, sigma):
             )
 
 
-def placement_error(analytes_pl, true_pl=None):
+def placement_error(
+        analytes_pl: np.ndarray, 
+        true_pl: np.ndarray
+    ) -> np.float64:
     """
     Conpute placement error for a given analyte list result.
     
     Parameters
     ----------
-    analytes_pl: 
+    analytes_pl: np.ndarray
         list with analyte placements.
-    true_pl:
+    true_pl: np.ndarray
         the true placements that the analytes should have.
         
     Returns
     -------
+    np.ndarray
         returns the placement error
     """
     
-    list_len = analytes_pl.shape[0]
-    
-    if not true_pl:
-        true_pl = np.arange(1, list_len + 1)/list_len
-       
-    return 2 * np.abs(np.sort(analytes_pl) - true_pl).sum() / list_len
+    return 2 * np.abs(np.sort(analytes_pl) - true_pl).sum() / analytes_pl.shape[0]
 
-def cdf(x, mu, sigma):
+def cdf(
+        x: np.ndarray, 
+        mu: np.ndarray, 
+        sigma: np.ndarray
+    ) -> np.ndarray:
     """
     Cumulative distribution function for Normal Distribution.
     
     Parameters
     ----------
-    x:
+    x: np.ndarray
         position to calculate P(X < x)
-    mu:
+    mu: np.ndarray
         mean of the Normal Distribution.
-    sigma:
+    sigma: np.ndarray
         standard deviation of the Normal Distribution.
         
-    Return
-    ------
+    Returns
+    -------
+    np.ndarray
         cdf at x.
     """
     
     
     return 0.5 * (1.0 + erf((x - mu) / (sigma * np.sqrt(2.0))))
 
-def overlap_error(mu, sigma):
+def overlap_error(
+        mu: np.ndarray, 
+        sigma: np.ndarray
+    ) -> np.float64:
     """
     Compute the overlaping error of the analytes.
     
     Parameters
     ----------
-    mu:
+    mu: np.ndarray
         mean of the peak per analyte
-    sigma:
+    sigma: np.ndarray
         standard deviation of the peak per analyte.
         
     Returns
     -------
+    np.float64
         The overlaping error of all the analytes.
     """
     indexes = np.argsort(sigma)
@@ -137,9 +166,24 @@ class ExperimentAnalytes(object):
     """
     
     
-    def __init__(self, k0, S, h=0.001, run_time=None, grad='iso'):
+    def __init__(
+            self, 
+            k0: np.ndarray, 
+            S: np.ndarray, 
+            h: float = 0.001, 
+            run_time: float  = None, 
+            grad: str = 'iso'
+        ) -> None:
         """
         Initialize the class properties.
+
+        Parameters
+        ----------
+        k0: np.ndarray
+        S: np.ndarray, 
+        h = 0.001: float, 
+        run_time = None: float, 
+        grad = 'iso': str
         """
         
         
@@ -154,9 +198,13 @@ class ExperimentAnalytes(object):
         # 'k0' and 'S' shape match
         if not k0.shape == S.shape:
             raise ValueError(f"Shape mismatch: k0 -> {k0.shape}, S -> {S.shape}")
+
+        # 'run_time' should be positive.
+        if run_time and run_time <= 0:
+            raise ValueError(f"'run_time' should be >0, given: {run_time}")
         
         ### Set initial values ###
-        
+        self.n_analytes = len(k0)
         self.k0 = k0
         self.S = S
         self.h = float(h)
@@ -186,7 +234,9 @@ class ExperimentAnalytes(object):
             
         self.grad = grad
 
-    def reset(self):
+    def reset(
+            self
+        ) -> None:
         """
             Reset to default settings.
         """
@@ -200,19 +250,21 @@ class ExperimentAnalytes(object):
         self.positions = [np.zeros(self.k0.shape)]
         self.phis = []
         self.delta_taus = []
-        self.done = False
-
-
-    def loss(self):
-        return placement_error(self.positions[-1]) + overlap_error(self.positions[-1], self.sig)
-            
+        self.done = False           
     
     def __str__(self):
         return (
-            f"k0: {self.k0}\nS: {self.S}\nh: {self.h}\n" + 
-            f"run_time: {self.run_time}\nLast time_travel: {self.time_travel[-1]}\n" +
-            f"Last positions: {self.positions[-1]}\nfinal_position: {self.final_position}\n" +
-            f"grad: {self.grad}\nphis: {self.phis}\ndelta_taus: {self.delta_taus}\n" +
+            f"n_analytes: {self.n_analytes}\n" +
+            f"k0: {self.k0}\n" +
+            f"S: {self.S}\n" +
+            f"h: {self.h}\n" + 
+            f"run_time: {self.run_time}\n" +
+            f"Last time_travel: {self.time_travel[-1]}\n" +
+            f"Last positions: {self.positions[-1]}\n" +
+            f"final_position: {self.final_position}\n" +
+            f"grad: {self.grad}\n" +
+            f"phis: {self.phis}\n" +
+            f"delta_taus: {self.delta_taus}\n" +
             f"done: {self.done}"
         )
     
@@ -224,7 +276,10 @@ class ExperimentAnalytes(object):
         
         return (10 ** (-phi * self.S)) * self.k0
     
-    
+    @property
+    def even_space_positions(self):
+        return np.linspace(0, self.final_position, self.n_analytes + 1)[1:]
+
     @property
     def sig(self):
         """
@@ -394,3 +449,52 @@ class ExperimentAnalytes(object):
         
         for phi, delta_tau in zip(phis, delta_taus):
             self.step(phi, delta_tau)
+
+    def loss(
+            self,
+            weights=[1., 1.]
+        ):
+        """
+        Compute loss of the Experiment based on placement error and overlap error.
+        """
+
+        return (
+            weights[0] * placement_error(self.positions[-1], self.even_space_positions) + 
+            weights[1] * overlap_error(self.positions[-1], self.sig)
+        )
+class Policy(nn.Module):
+
+    def __init__(self, n_param):
+        super(Policy, self).__init__()
+        self.n_param = n_param
+        
+        # Define network
+        self.fc_mu = nn.Linear(1, n_param, bias=False)
+        self.sig = nn.Sigmoid()
+        self.fc_sigma = nn.Linear(1, n_param, bias=False)
+        self.softplus = nn.Softplus()
+        
+        
+    def forward(self):
+        out = torch.ones((1,1))
+        self.mu = self.sig(self.fc_mu(out)).squeeze()
+        self.sigma = self.softplus(self.fc_sigma(out)).squeeze()
+        
+        return self.mu, self.sigma
+    
+    def sample(self, n_samples):
+        
+        if self.n_param == 1:
+            return (
+                Normal(
+                    self.mu, self.sigma
+                )
+                .sample((n_samples,))
+            )
+        else:
+            return (
+                MultivariateNormal(
+                    self.mu, torch.diag(self.sigma)
+                )
+                .sample((n_samples,))
+            )
