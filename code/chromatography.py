@@ -395,7 +395,7 @@ class ExperimentAnalytes(object):
         plt.rcParams['axes.facecolor'] = 'whitesmoke'
 
         # print limit of x
-        plt.axhline(y=self.final_position, color='r', linestyle='--')
+        plt.axhline(y=self.final_position, color='r', linestyle='--', label='x_lim')
 
         # coordinated for the gradient velocity
         u = np.linspace(0.0, self.final_position + 0.2, 100)
@@ -410,8 +410,8 @@ class ExperimentAnalytes(object):
                 col = 'r'
             else:
                 col = 'b'
-            # Plot the volocity of the solvent
-            plt.plot(u + tau, u, linestyle='--', c='k')
+            # Plot the velocity of the solvent
+            plt.plot(u + tau, u, linestyle='--', c='k', label='change of solvent strength'*i)
             
             # Add the solvent gradient on the line
             l2 = np.array(((u+tau)[-15] - 0.02, u[-15]))
@@ -462,6 +462,8 @@ class ExperimentAnalytes(object):
             weights[0] * placement_error(self.positions[-1], self.even_space_positions) + 
             weights[1] * overlap_error(self.positions[-1], self.sig)
         )
+
+
 class Policy(nn.Module):
 
     def __init__(self, n_param):
@@ -498,3 +500,180 @@ class Policy(nn.Module):
                 )
                 .sample((n_samples,))
             )
+
+class PolicyTime(nn.Module):
+
+    def __init__(self, n_param):
+        super(PolicyTime, self).__init__()
+        self.n_param = 2 * n_param
+        
+        # Define network
+        self.fc_mu = nn.Linear(1, n_param * 2, bias=False)
+        self.sig = nn.Sigmoid()
+        self.fc_sigma = nn.Linear(1, n_param * 2, bias=False)
+        self.softplus = nn.Softplus()
+        
+        
+    def forward(self):
+        out = torch.ones((1,1))
+        self.mu = self.sig(self.fc_mu(out)).squeeze()
+        self.sigma = self.softplus(self.fc_sigma(out)).squeeze()
+        
+        return self.mu, self.sigma
+    
+    def sample(self, n_samples):
+        
+        if self.n_param == 1:
+            return (
+                Normal(
+                    self.mu, self.sigma
+                )
+                .sample((n_samples,))
+            )
+        else:
+            return (
+                MultivariateNormal(
+                    self.mu, torch.diag(self.sigma)
+                )
+                .sample((n_samples,))
+            )
+
+
+def reinforce(
+        exp, 
+        policy, 
+        delta_taus, 
+        num_episodes = 1000, 
+        batch_size = 10, 
+        lr = 1., 
+        optim = torch.optim.SGD,
+        print_every = 100,
+        lr_decay = None,
+        weights = [1., 1.],
+        baseline = 0.
+    ):
+
+    losses = []
+    loss = 0
+    loss_best = 2 
+    
+    for n in range(num_episodes):
+        # learning rate decay
+        if lr_decay:
+            lr = lr_decay(lr, (n + 1), num_episodes)            
+        
+        # Optimizer
+        optimizer = optim(policy.parameters(), lr=lr)
+        
+        # compute distribution parameters (Normal)
+        policy.forward()
+        # Sample some values from the actions distributions
+        programs = policy.sample(batch_size)
+        
+        # Fit the sampled data to the constraint [0,1]
+        constr_programs = programs.clone()
+        constr_programs[constr_programs > 1] = 1
+        constr_programs[constr_programs < 0] = 0
+        
+        J = 0
+        for i in range(batch_size):
+            exp.reset()            
+            exp.run_all(constr_programs[i].data.numpy(), delta_taus)
+            error = exp.loss(weights)
+            loss += error
+            J += (error - baseline) * log_prob(programs[i], policy.mu, policy.sigma)
+            if error < loss_best:
+                loss_best = error
+                best_program = constr_programs[i]
+                        
+        if (n + 1) % print_every == 0:
+            losses.append(loss/(batch_size * print_every))
+            print(f"Loss: {losses[-1]}, epoch: {n+1}/{num_episodes}")
+            #print(f"Means: {pol.mu.data}, Sigmas: {pol.sigma.data}")
+            loss = 0
+        J /= batch_size  
+        optimizer.zero_grad()
+        
+        # Calculate gradients
+        J.backward()
+        
+        # Apply gradients
+        optimizer.step()
+        
+    return losses, best_program
+
+def reinforce_delta_tau(
+        exp, 
+        policy,
+        num_episodes = 1000, 
+        batch_size = 10, 
+        lr = 1., 
+        optim = torch.optim.SGD,
+        print_every = 100,
+        lr_decay = None,
+        weights = [1., 1.],
+        baseline = 0.
+    ):
+
+    losses = []
+    loss = 0
+    loss_best = 2
+    n_par = []
+    mus = []
+    sigmas = []
+    delta_taus_ = []
+    
+    for n in range(num_episodes):
+        # learning rate decay
+        if lr_decay:
+            lr = lr_decay(lr, (n + 1), num_episodes)            
+        
+        # Optimizer
+        optimizer = optim(policy.parameters(), lr=lr)
+        
+        # compute distribution parameters (Normal)
+        policy.forward()
+        
+        mus.append(list(policy.mu))
+        sigmas.append(list(policy.sigma))
+        
+        # Sample some values from the actions distributions
+        values = policy.sample(batch_size)
+        
+        # Fit the sampled data to the constraint [0,1] or [0, +inf)
+        programs, delta_taus = np.split(values.clone().numpy(), 2, 1)
+        programs[programs > 1] = 1
+        programs[programs < 0] = 0
+        delta_taus[delta_taus < 0] = 1e-7
+        delta_taus[:,-1] = 10000
+        J = 0
+        
+        for i in range(batch_size):
+            exp.reset()            
+            exp.run_all(programs[i].data, delta_taus[i])
+            n_par.append(len(exp.delta_taus))
+            delta_taus_.append(list(delta_taus[i]))
+            
+            
+            error = exp.loss(weights)
+            loss += error
+            J += (error - baseline) * log_prob(values[i], policy.mu, policy.sigma)
+            if error < loss_best:
+                loss_best = error
+                best_program = [programs[i], delta_taus[i]]
+                        
+        if (n + 1) % print_every == 0:
+            losses.append(loss/(batch_size * print_every))
+            print(f"Loss: {losses[-1]}, epoch: {n+1}/{num_episodes}")
+            #print(f"Means: {pol.mu.data}, Sigmas: {pol.sigma.data}")
+            loss = 0
+        J /= batch_size  
+        optimizer.zero_grad()
+        
+        # Calculate gradients
+        J.backward()
+                
+        # Apply gradients
+        optimizer.step()
+        
+    return losses, best_program, n_par, np.array(mus), np.array(sigmas), np.array(delta_taus_)
