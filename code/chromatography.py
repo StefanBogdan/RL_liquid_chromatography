@@ -115,6 +115,8 @@ def overlap_error(
     np.float64
         The overlaping error of all the analytes.
     """
+
+
     indexes = np.argsort(sigma)
     mu_1 = (mu[indexes])[:-1]
     sigma_1 = (sigma[indexes])[:-1]
@@ -271,7 +273,7 @@ class ExperimentAnalytes(object):
         
     def k(self, phi):
         """
-        Compute retention factor k a given phi.
+        Compute retention factor k for a given phi.
         """
         
         return (10 ** (-phi * self.S)) * self.k0
@@ -418,7 +420,7 @@ class ExperimentAnalytes(object):
             th2 = plt.text(
                 l2[0],
                 l2[1],
-                f"phi = {self.phis[i]}",
+                f"phi = {str(np.round(self.phis[i], 3))}",
                 fontsize=12,
                 rotation=angle,
                 rotation_mode='anchor'
@@ -466,10 +468,12 @@ class ExperimentAnalytes(object):
 
 class Policy(nn.Module):
 
-    def __init__(self, n_param):
+    def __init__(self, n_param, sigma_min = .0):
+
         super(Policy, self).__init__()
         self.n_param = n_param
-        
+        self.sigma_min = sigma_min
+
         # Define network
         self.fc_mu = nn.Linear(1, n_param, bias=False)
         self.sig = nn.Sigmoid()
@@ -480,7 +484,7 @@ class Policy(nn.Module):
     def forward(self):
         out = torch.ones((1,1))
         self.mu = self.sig(self.fc_mu(out)).squeeze()
-        self.sigma = self.softplus(self.fc_sigma(out)).squeeze()
+        self.sigma = self.sig(self.fc_sigma(out)).squeeze()/10.0 + self.sigma_min
         
         return self.mu, self.sigma
     
@@ -503,21 +507,23 @@ class Policy(nn.Module):
 
 class PolicyTime(nn.Module):
 
-    def __init__(self, n_param):
+    def __init__(self, n_param, sigma_min = .0):
         super(PolicyTime, self).__init__()
         self.n_param = 2 * n_param
+        self.sigma_min = sigma_min
         
         # Define network
-        self.fc_mu = nn.Linear(1, n_param * 2, bias=False)
+        self.fc_mu = nn.Linear(1, n_param * 2 - 1, bias=False)
         self.sig = nn.Sigmoid()
-        self.fc_sigma = nn.Linear(1, n_param * 2, bias=False)
+        self.fc_sigma = nn.Linear(1, n_param * 2 - 1, bias=False)
         self.softplus = nn.Softplus()
         
         
     def forward(self):
         out = torch.ones((1,1))
-        self.mu = self.sig(self.fc_mu(out)).squeeze()
-        self.sigma = self.softplus(self.fc_sigma(out)).squeeze()
+        self.mu = self.sig(self.fc_mu(out)).squeeze() 
+        self.sigma = self.softplus(self.fc_sigma(out)).squeeze() + self.sigma_min
+
         
         return self.mu, self.sigma
     
@@ -556,17 +562,23 @@ def reinforce(
     losses = []
     loss = 0
     loss_best = 2 
+    epoch_mus = []
+    epoch_sigmas = []
+    epoch_n_taus = []
+
     
-    for n in range(num_episodes):
-        # learning rate decay
-        if lr_decay:
-            lr = lr_decay(lr, (n + 1), num_episodes)            
+    for n in range(num_episodes):           
         
         # Optimizer
-        optimizer = optim(policy.parameters(), lr=lr)
+        optimizer = optim(policy.parameters(), lr)
         
         # compute distribution parameters (Normal)
         policy.forward()
+
+        # Save parameters
+        epoch_mus.append(policy.mu.detach().numpy())
+        epoch_sigmas.append(policy.sigma.detach().numpy())
+
         # Sample some values from the actions distributions
         programs = policy.sample(batch_size)
         
@@ -579,6 +591,8 @@ def reinforce(
         for i in range(batch_size):
             exp.reset()            
             exp.run_all(constr_programs[i].data.numpy(), delta_taus)
+            epoch_n_taus.append(len(exp.delta_taus))
+
             error = exp.loss(weights)
             loss += error
             J += (error - baseline) * log_prob(programs[i], policy.mu, policy.sigma)
@@ -591,6 +605,7 @@ def reinforce(
             print(f"Loss: {losses[-1]}, epoch: {n+1}/{num_episodes}")
             #print(f"Means: {pol.mu.data}, Sigmas: {pol.sigma.data}")
             loss = 0
+
         J /= batch_size  
         optimizer.zero_grad()
         
@@ -599,8 +614,12 @@ def reinforce(
         
         # Apply gradients
         optimizer.step()
+
+        # learning rate decay
+        if lr_decay:
+            lr = lr_decay(lr, (n + 1), num_episodes) 
         
-    return losses, best_program
+    return np.array(losses), best_program,  np.array(epoch_mus), np.array(epoch_sigmas), np.array(epoch_n_taus)
 
 def reinforce_delta_tau(
         exp, 
@@ -618,10 +637,9 @@ def reinforce_delta_tau(
     losses = []
     loss = 0
     loss_best = 2
-    n_par = []
-    mus = []
-    sigmas = []
-    delta_taus_ = []
+    epoch_n_par = []
+    epoch_mus = []
+    epoch_sigmas = []
     
     for n in range(num_episodes):
         # learning rate decay
@@ -634,26 +652,29 @@ def reinforce_delta_tau(
         # compute distribution parameters (Normal)
         policy.forward()
         
-        mus.append(list(policy.mu))
-        sigmas.append(list(policy.sigma))
+        # Save parameters
+        epoch_mus.append(list(policy.mu))
+        epoch_sigmas.append(list(policy.sigma))
         
         # Sample some values from the actions distributions
         values = policy.sample(batch_size)
+
+        # Add tau for the last solvent strength (
+        # runs until an analyte reaches th end of the columns
+        new_values = np.ones((values.shape[0], values.shape[1] + 1)) * 1e5
+        new_values[:, :-1] = values
         
-        # Fit the sampled data to the constraint [0,1] or [0, +inf)
-        programs, delta_taus = np.split(values.clone().numpy(), 2, 1)
+        # Fit the sampled data to the constraint [0,1] or (0, +inf)
+        programs, delta_taus = np.split(new_values, 2, 1)
         programs[programs > 1] = 1
         programs[programs < 0] = 0
         delta_taus[delta_taus < 0] = 1e-7
-        delta_taus[:,-1] = 10000
         J = 0
         
         for i in range(batch_size):
             exp.reset()            
             exp.run_all(programs[i].data, delta_taus[i])
-            n_par.append(len(exp.delta_taus))
-            delta_taus_.append(list(delta_taus[i]))
-            
+            epoch_n_par.append(len(exp.delta_taus))            
             
             error = exp.loss(weights)
             loss += error
@@ -676,4 +697,4 @@ def reinforce_delta_tau(
         # Apply gradients
         optimizer.step()
         
-    return losses, best_program, n_par, np.array(mus), np.array(sigmas), np.array(delta_taus_)
+    return losses, best_program, np.array(epoch_mus), np.array(epoch_sigmas), np.array(epoch_n_par)
