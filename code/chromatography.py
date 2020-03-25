@@ -43,7 +43,7 @@ def log_prob(
             )
     else:
         return (
-            MultivariateNormal(mu, torch.diag(sigma))
+            MultivariateNormal(mu, torch.diag(sigma ** 2))
             .log_prob(value)
             )
 
@@ -468,11 +468,13 @@ class ExperimentAnalytes(object):
 
 class Policy(nn.Module):
 
-    def __init__(self, n_param, sigma_min = .0):
+    def __init__(self, n_param, sigma_min = .0, sigma_max = .1):
 
         super(Policy, self).__init__()
         self.n_param = n_param
         self.sigma_min = sigma_min
+        self.sigma_max = sigma_max
+
 
         # Define network
         self.fc_mu = nn.Linear(1, n_param, bias=False)
@@ -484,7 +486,11 @@ class Policy(nn.Module):
     def forward(self):
         out = torch.ones((1,1))
         self.mu = self.sig(self.fc_mu(out)).squeeze()
-        self.sigma = self.sig(self.fc_sigma(out)).squeeze()/10.0 + self.sigma_min
+        self.sigma = self.sig(self.fc_sigma(out)).squeeze() * self.sigma_max + self.sigma_min
+
+        # retain grad for both mu and sigma
+        self.mu.retain_grad()
+        self.sigma.retain_grad()
         
         return self.mu, self.sigma
     
@@ -500,17 +506,18 @@ class Policy(nn.Module):
         else:
             return (
                 MultivariateNormal(
-                    self.mu, torch.diag(self.sigma)
+                    self.mu, torch.diag(self.sigma ** 2)
                 )
                 .sample((n_samples,))
             )
 
 class PolicyTime(nn.Module):
 
-    def __init__(self, n_param, sigma_min = .0):
+    def __init__(self, n_param, sigma_min = .0, sigma_max = 0.1):
         super(PolicyTime, self).__init__()
         self.n_param = 2 * n_param
         self.sigma_min = sigma_min
+        self.sigma_max = sigma_max
         
         # Define network
         self.fc_mu = nn.Linear(1, n_param * 2 - 1, bias=False)
@@ -522,7 +529,7 @@ class PolicyTime(nn.Module):
     def forward(self):
         out = torch.ones((1,1))
         self.mu = self.sig(self.fc_mu(out)).squeeze() 
-        self.sigma = self.softplus(self.fc_sigma(out)).squeeze() + self.sigma_min
+        self.sigma = self.softplus(self.fc_sigma(out)).squeeze() * self.sigma_max + self.sigma_min
 
         
         return self.mu, self.sigma
@@ -539,7 +546,7 @@ class PolicyTime(nn.Module):
         else:
             return (
                 MultivariateNormal(
-                    self.mu, torch.diag(self.sigma)
+                    self.mu, torch.diag(self.sigma ** 2)
                 )
                 .sample((n_samples,))
             )
@@ -556,7 +563,9 @@ def reinforce(
         print_every = 100,
         lr_decay = None,
         weights = [1., 1.],
-        baseline = 0.
+        baseline = 0.,
+        max_norm = None,
+        beta = .0
     ):
 
     losses = []
@@ -565,6 +574,9 @@ def reinforce(
     epoch_mus = []
     epoch_sigmas = []
     epoch_n_taus = []
+    samples = []
+    mu_grads = []
+    sigma_grads = []
 
     
     for n in range(num_episodes):           
@@ -586,6 +598,8 @@ def reinforce(
         constr_programs = programs.clone()
         constr_programs[constr_programs > 1] = 1
         constr_programs[constr_programs < 0] = 0
+
+        samples.append(constr_programs)
         
         J = 0
         for i in range(batch_size):
@@ -595,7 +609,8 @@ def reinforce(
 
             error = exp.loss(weights)
             loss += error
-            J += (error - baseline) * log_prob(programs[i], policy.mu, policy.sigma)
+            log_prob_ = log_prob(programs[i], policy.mu, policy.sigma)
+            J += (error - baseline) * log_prob_ + beta * torch.exp(log_prob_) * log_prob_
             if error < loss_best:
                 loss_best = error
                 best_program = constr_programs[i]
@@ -611,7 +626,14 @@ def reinforce(
         
         # Calculate gradients
         J.backward()
-        
+
+        if max_norm:
+            torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm)
+
+        # gradients with respect tu mu and sigma
+        mu_grads.append(policy.mu.grad)
+        sigma_grads.append(policy.sigma.grad)
+
         # Apply gradients
         optimizer.step()
 
@@ -619,7 +641,8 @@ def reinforce(
         if lr_decay:
             lr = lr_decay(lr, (n + 1), num_episodes) 
         
-    return np.array(losses), best_program,  np.array(epoch_mus), np.array(epoch_sigmas), np.array(epoch_n_taus)
+    return np.array(losses), best_program,  np.array(epoch_mus), np.array(epoch_sigmas), \
+        np.array(epoch_n_taus), np.vstack(samples), np.vstack(mu_grads), np.vstack(sigma_grads)
 
 def reinforce_delta_tau(
         exp, 
