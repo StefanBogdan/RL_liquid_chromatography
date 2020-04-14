@@ -471,28 +471,79 @@ class Policy(nn.Module):
     def __init__(self, n_param, sigma_min = .0, sigma_max = .1):
 
         super(Policy, self).__init__()
+
+        # parameters
         self.n_param = n_param
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
 
 
         # Define network
-        self.fc_mu = nn.Linear(1, n_param, bias=False)
         self.sig = nn.Sigmoid()
+        self.fc_mu = nn.Linear(1, n_param, bias=False)        
         self.fc_sigma = nn.Linear(1, n_param, bias=False)
-        self.softplus = nn.Softplus()
         
-        
+    
     def forward(self):
         out = torch.ones((1,1))
         self.mu = self.sig(self.fc_mu(out)).squeeze()
-        self.sigma = self.sig(self.fc_sigma(out)).squeeze() * self.sigma_max + self.sigma_min
+        # limit sigma to be in range (sigma_min; sigma_max)
+        self.sigma = self.sig(self.fc_sigma(out)).squeeze() * (self.sigma_max - self.sigma_min) + self.sigma_min
 
         # retain grad for both mu and sigma
         self.mu.retain_grad()
         self.sigma.retain_grad()
         
         return self.mu, self.sigma
+
+    
+    def sample(self, n_samples):
+        
+        if self.n_param == 1:
+            return (
+                Normal(
+                    self.mu, self.sigma
+                )
+                .sample((n_samples,1))
+            )
+        else:
+            return (
+                MultivariateNormal(
+                    self.mu, torch.diag(self.sigma ** 2)
+                )
+                .sample((n_samples,))
+            )
+
+class PolicyISO(nn.Module):
+
+    def __init__(self, n_param, sigma_min = .0, sigma_max = .1):
+
+        super(PolicyISO, self).__init__()
+
+        # parameters
+        self.n_param = n_param
+        self.sigma_min = sigma_min
+        self.sigma_max = sigma_max
+
+
+        # Define network
+        self.sig = nn.Sigmoid()
+        self.fc_mu = nn.Linear(1, n_param, bias=False)        
+        self.fc_sigma = nn.Linear(1, n_param, bias=False)
+        
+    
+    def forward(self, up_lim, low_lim):
+        out = torch.ones((1,1))
+        self.mu = self.sig(self.fc_mu(out)).squeeze() * (up_lim - low_lim) + low_lim
+        # limit sigma to be in range (sigma_min; sigma_max)
+        self.sigma = self.sig(self.fc_sigma(out)).squeeze() * (self.sigma_max - self.sigma_min) + self.sigma_min
+
+        # retain grad for both mu and sigma
+        self.mu.retain_grad()
+        self.sigma.retain_grad()
+        
+        return self.mu, self.sigma
+
     
     def sample(self, n_samples):
         
@@ -515,6 +566,8 @@ class PolicyTime(nn.Module):
 
     def __init__(self, n_param, sigma_min = .0, sigma_max = 0.1):
         super(PolicyTime, self).__init__()
+
+        # parameters
         self.n_param = 2 * n_param
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
@@ -529,10 +582,10 @@ class PolicyTime(nn.Module):
     def forward(self):
         out = torch.ones((1,1))
         self.mu = self.sig(self.fc_mu(out)).squeeze() 
-        self.sigma = self.softplus(self.fc_sigma(out)).squeeze() * self.sigma_max + self.sigma_min
+        self.sigma = self.softplus(self.fc_sigma(out)).squeeze() * (self.sigma_max - self.sigma_min) + self.sigma_min
 
-        
         return self.mu, self.sigma
+
     
     def sample(self, n_samples):
         
@@ -610,7 +663,7 @@ def reinforce(
             error = exp.loss(weights)
             loss += error
             log_prob_ = log_prob(programs[i], policy.mu, policy.sigma)
-            J += (error - baseline) * log_prob_ + beta * torch.exp(log_prob_) * log_prob_
+            J += (error - baseline) * log_prob_ - beta * torch.exp(log_prob_) * log_prob_
             if error < loss_best:
                 loss_best = error
                 best_program = constr_programs[i]
@@ -644,6 +697,7 @@ def reinforce(
     return np.array(losses), best_program,  np.array(epoch_mus), np.array(epoch_sigmas), \
         np.array(epoch_n_taus), np.vstack(samples), np.vstack(mu_grads), np.vstack(sigma_grads)
 
+
 def reinforce_delta_tau(
         exp, 
         policy,
@@ -654,7 +708,8 @@ def reinforce_delta_tau(
         print_every = 100,
         lr_decay = None,
         weights = [1., 1.],
-        baseline = 0.
+        baseline = 0.,
+        max_norm = 1.
     ):
 
     losses = []
@@ -664,10 +719,7 @@ def reinforce_delta_tau(
     epoch_mus = []
     epoch_sigmas = []
     
-    for n in range(num_episodes):
-        # learning rate decay
-        if lr_decay:
-            lr = lr_decay(lr, (n + 1), num_episodes)            
+    for n in range(num_episodes):          
         
         # Optimizer
         optimizer = optim(policy.parameters(), lr=lr)
@@ -716,8 +768,220 @@ def reinforce_delta_tau(
         
         # Calculate gradients
         J.backward()
+
+        if max_norm:
+            torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm)
                 
         # Apply gradients
         optimizer.step()
+
+        # learning rate decay
+        if lr_decay:
+            lr = lr_decay(lr, (n + 1), num_episodes) 
         
     return losses, best_program, np.array(epoch_mus), np.array(epoch_sigmas), np.array(epoch_n_par)
+
+
+def reinforce_best_iso(
+        exp, 
+        policy, 
+        delta_taus, 
+        num_episodes = 1000, 
+        batch_size = 10, 
+        lr = 1., 
+        optim = torch.optim.SGD,
+        print_every = 100,
+        lr_decay = None,
+        weights = [1., 1.],
+        baseline = 0.,
+        max_norm = None,
+        beta = .0,
+        lim = 0.1
+    ):
+
+    losses = []
+    loss = 3
+    loss_best = 2 
+    epoch_mus = []
+    epoch_sigmas = []
+    epoch_n_taus = []
+    samples = []
+    mu_grads = []
+    sigma_grads = []
+
+
+    for phi in np.linspace(0, 1, 1000):
+        exp.reset()
+        exp.step(phi, 1.)
+        if exp.loss() < loss:
+            phi_iso = phi
+            loss = exp.loss()
+
+    loss = 0
+
+    low_lim = max(0, phi_iso - lim)
+    up_lim = min(1, phi_iso + lim)
+    print(phi_iso, low_lim, up_lim)
+    
+    for n in range(num_episodes):           
+        
+        # Optimizer
+        optimizer = optim(policy.parameters(), lr)
+        
+        # compute distribution parameters (Normal)
+        policy.forward(up_lim, low_lim)
+
+        # Save parameters
+        epoch_mus.append(policy.mu.detach().numpy())
+        epoch_sigmas.append(policy.sigma.detach().numpy())
+
+        # Sample some values from the actions distributions
+        programs = policy.sample(batch_size)
+        
+        # Fit the sampled data to the constraint [0,1]
+        constr_programs = programs.clone()
+        constr_programs[constr_programs > up_lim] = up_lim
+        constr_programs[constr_programs < low_lim] = low_lim
+
+        samples.append(constr_programs)
+        
+        J = 0
+        for i in range(batch_size):
+            exp.reset()            
+            exp.run_all(constr_programs[i].data.numpy(), delta_taus)
+            epoch_n_taus.append(len(exp.delta_taus))
+
+            error = exp.loss(weights)
+            loss += error
+            log_prob_ = log_prob(programs[i], policy.mu, policy.sigma)
+            J += (error - baseline) * log_prob_ - beta * torch.exp(log_prob_) * log_prob_
+            if error < loss_best:
+                loss_best = error
+                best_program = constr_programs[i]
+                        
+        if (n + 1) % print_every == 0:
+            losses.append(loss/(batch_size * print_every))
+            print(f"Loss: {losses[-1]}, epoch: {n+1}/{num_episodes}")
+            #print(f"Means: {pol.mu.data}, Sigmas: {pol.sigma.data}")
+            loss = 0
+
+        J /= batch_size  
+        optimizer.zero_grad()
+        
+        # Calculate gradients
+        J.backward()
+
+        if max_norm:
+            torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm)
+
+        # gradients with respect tu mu and sigma
+        mu_grads.append(policy.mu.grad)
+        sigma_grads.append(policy.sigma.grad)
+
+        # Apply gradients
+        optimizer.step()
+
+        # learning rate decay
+        if lr_decay:
+            lr = lr_decay(lr, (n + 1), num_episodes) 
+        
+    return np.array(losses), best_program,  np.array(epoch_mus), np.array(epoch_sigmas), \
+        np.array(epoch_n_taus), np.vstack(samples), np.vstack(mu_grads), np.vstack(sigma_grads)
+
+
+
+
+def reinforce_best(
+        exp, 
+        policy, 
+        delta_taus, 
+        num_episodes = 1000, 
+        batch_size = 10, 
+        lr = 1., 
+        optim = torch.optim.SGD,
+        print_every = 100,
+        lr_decay = None,
+        weights = [1., 1.],
+        baseline = 0.,
+        max_norm = None,
+        beta = .0
+    ):
+
+    losses = []
+    loss = 0
+    loss_best = 2 
+    epoch_mus = []
+    epoch_sigmas = []
+    epoch_n_taus = []
+    samples = []
+    mu_grads = []
+    sigma_grads = []
+
+    
+    for n in range(num_episodes):           
+        
+        # Optimizer
+        optimizer = optim(policy.parameters(), lr)
+        
+        # compute distribution parameters (Normal)
+        policy.forward()
+
+        # Save parameters
+        epoch_mus.append(policy.mu.detach().numpy())
+        epoch_sigmas.append(policy.sigma.detach().numpy())
+
+        # Sample some values from the actions distributions
+        programs = policy.sample(batch_size)
+        
+        # Fit the sampled data to the constraint [0,1]
+        constr_programs = programs.clone()
+        constr_programs[constr_programs > 1] = 1
+        constr_programs[constr_programs < 0] = 0
+
+        samples.append(constr_programs)
+        
+        J = 0
+        best = 3.
+        for i in range(batch_size):
+            exp.reset()            
+            exp.run_all(constr_programs[i].data.numpy(), delta_taus)
+            epoch_n_taus.append(len(exp.delta_taus))
+
+            error = exp.loss(weights)
+            if error < best:
+                log_prob_ = log_prob(programs[i], policy.mu, policy.sigma)
+                J = -(error - baseline) * log_prob_ + beta * torch.exp(log_prob_) * log_prob_
+                if error < loss_best:
+                    loss_best = error
+                    best_program = constr_programs[i]
+                best = error.copy()
+        loss += best
+            
+                        
+        if (n + 1) % print_every == 0:
+            losses.append(loss/(print_every))
+            print(f"Loss: {losses[-1]}, epoch: {n+1}/{num_episodes}")
+            #print(f"Means: {pol.mu.data}, Sigmas: {pol.sigma.data}")
+            loss = 0
+ 
+        optimizer.zero_grad()
+        
+        # Calculate gradients
+        J.backward()
+
+        if max_norm:
+            torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm)
+
+        # gradients with respect tu mu and sigma
+        mu_grads.append(policy.mu.grad)
+        sigma_grads.append(policy.sigma.grad)
+
+        # Apply gradients
+        optimizer.step()
+
+        # learning rate decay
+        if lr_decay:
+            lr = lr_decay(lr, (n + 1), num_episodes) 
+        
+    return np.array(losses), best_program,  np.array(epoch_mus), np.array(epoch_sigmas), \
+        np.array(epoch_n_taus), np.vstack(samples), np.vstack(mu_grads), np.vstack(sigma_grads)
