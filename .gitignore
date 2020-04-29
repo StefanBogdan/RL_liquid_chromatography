@@ -5,3 +5,5 @@
 *.xlsx
 code/.ipynb_checkpoints
 code/__pycache__
+code/results
+docs
