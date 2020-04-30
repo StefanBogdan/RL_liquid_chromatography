@@ -1,7 +1,7 @@
 """
 Liquid Chromatography Separation Module
 """
-from typing import Tuple, Iterable
+from typing import Tuple, Iterable, Union
 import numpy as np
 import pandas as pd
 import torch 
@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from torch import optim, tensor
 from torch.distributions.normal import Normal
 from torch.distributions.multivariate_normal import MultivariateNormal
+from torch.optim.lr_scheduler import StepLR, MultiStepLR
 from random import randint, random
 from chromatography import ExperimentAnalytes
 
@@ -93,7 +94,7 @@ def sample(
             )
 
 
-class Policy(nn.Module):
+class PolicySingle(nn.Module):
 
     def __init__(self, 
             n_steps: int,
@@ -121,7 +122,7 @@ class Policy(nn.Module):
         if sigma_min < 0.  or sigma_max < sigma_min or sigma_max > 1. :
             raise ValueError(f"sigmas cannot be negative, sigma_min < sigma_max and maximum value for sigma is 1.0")
 
-        super(Policy, self).__init__()
+        super(PolicySingle, self).__init__()
 
         # parameters
         self.n_steps = n_steps
@@ -155,7 +156,7 @@ class Policy(nn.Module):
         return self.mu, self.sigma
 
 
-class PolicyISO(nn.Module):
+class PolicySingleISO(nn.Module):
 
     def __init__(self, 
             n_steps: int,
@@ -183,7 +184,7 @@ class PolicyISO(nn.Module):
         if sigma_min < 0.  or sigma_max < sigma_min or sigma_max > 1. :
             raise ValueError(f"sigmas cannot be negative, sigma_min < sigma_max and maximum value for sigma is 1.0")
 
-        super(PolicyISO, self).__init__()
+        super(PolicySingleISO, self).__init__()
 
         # parameters
         self.n_steps = n_steps
@@ -229,7 +230,7 @@ class PolicyISO(nn.Module):
         return self.mu, self.sigma
 
 
-class PolicyTime(nn.Module):
+class PolicySingleTime(nn.Module):
 
     def __init__(self, 
             n_steps: int,
@@ -257,7 +258,7 @@ class PolicyTime(nn.Module):
         if sigma_min < 0.  or sigma_max < sigma_min or sigma_max > 1. :
             raise ValueError(f"sigmas cannot be negative, sigma_min < sigma_max and maximum value for sigma is 1.0")
 
-        super(PolicyTime, self).__init__()
+        super(PolicySingleTime, self).__init__()
 
         # parameters
         self.n_steps = n_steps
@@ -291,14 +292,15 @@ class PolicyTime(nn.Module):
 
 def reinforce_one_set(
         exp: ExperimentAnalytes, 
-        policy: Policy, 
+        policy: PolicySingle, 
         delta_taus: Iterable[float], 
-        num_episodes = 1000, 
-        batch_size = 10, 
+        num_episodes: int = 1000, 
+        batch_size: int = 10, 
         lr: float = 1., 
-        optim: = torch.optim.SGD,
+        optim = torch.optim.SGD,
+        lr_decay_factor: float = 1.,
+        lr_milestones: Union[int, Iterable[int]] = 1000,
         print_every: int = 100,
-        lr_decay = None,
         weights: list = [1., 1.],
         baseline: float = 0.,
         max_norm: float = None,
@@ -309,7 +311,7 @@ def reinforce_one_set(
 
     exp: ExperimentAnalytes
         The experiment that is used to be optimized. 
-    policy: Policy
+    policy: PolicySingle
         The policy that learns the optimal values for the solvent
         strength program.
     delta_taus: Iterable[float]
@@ -324,10 +326,17 @@ def reinforce_one_set(
         Learning rate.
     optim = torch.optim.SGD
         Optimizer that performs weight update using gradients.
+        By defauld is Stochastic Gradient Descent.
+    lr_decay_factor: float
+        Learning rate decay factor used for the LRScheduler.
+        lr is updated according to lr = lr ** lr_decay_factor.
+    lr_milestones: Union[int, Iterable[int]]
+        Milestone episode/s to update the learning rate.
+        If it is int StepLR is used where lr is changed every lr_milestones.
+        If it is a list of ints then at that specific episode the lr
+        will be changed.
     print_every = 100,
         Number of episodes to print the average loss on.
-    lr_decay = None
-        Learning rate scheduler.
     weights = [1., 1.]
         Weigths of the errors to consider, first one is for the Placement Error,
         second one is for Overlap Error, By default both have the same wights.
@@ -338,23 +347,38 @@ def reinforce_one_set(
     beta = .0
         Entropy Regularization term, is used for more exploration.
         By defauld is disabled.
+
+    Returns
+    -------
+    (losses, best_program, mus, sigmas)
+    losses: np.ndarray
+        Expected loss of the action distribution over the whole learning
+        process.
+    best_program: np.ndarray
+        list of the phis that had the lowest loss (based from the samples).
+        NOTE: It might not be the global minima of the loss filed because
+        the samples are not drawn from the whole loss space.
+    mus: np.ndarray
+        Mus change over the learning process. its shape is (num_episodes, policy.n_split)
+    sigmas: np.ndarray
+        Sigmas change over the learning process. its shape is (num_episodes, policy.n_split)
     """
 
     losses = []
-    loss = 0
     loss_best = 2 
     epoch_mus = []
     epoch_sigmas = []
-    epoch_n_taus = []
-    samples = []
-    mu_grads = []
-    sigma_grads = []
+
+    # Optimizer
+    optimizer = optim(policy.parameters(), lr)
+    # LR sheduler
+    if isinstance(lr_milestones, list) or isinstance(lr_milestones, np.ndarray):
+        scheduler = MultiStepLR(optimizer, lr_milestones, gamma=lr_decay_factor)
+    else:
+        scheduler = StepLR(optimizer, lr_milestones, gamma=lr_decay_factor)
 
     
     for n in range(num_episodes):           
-        
-        # Optimizer
-        optimizer = optim(policy.parameters(), lr)
         
         # compute distribution parameters (Normal)
         mu, sigma = policy.forward()
@@ -370,28 +394,24 @@ def reinforce_one_set(
         constr_programs = programs.clone()
         constr_programs[constr_programs > 1] = 1
         constr_programs[constr_programs < 0] = 0
-
-        samples.append(constr_programs)
         
         J = 0
+        expected_loss = 0
         for i in range(batch_size):
             exp.reset()            
             exp.run_all(constr_programs[i].data.numpy(), delta_taus)
-            epoch_n_taus.append(len(exp.delta_taus))
 
             error = exp.loss(weights)
-            loss += error
+            expected_loss += error
             log_prob_ = log_prob(programs[i], policy.mu, policy.sigma)
             J += (error - baseline) * log_prob_ - beta * torch.exp(log_prob_) * log_prob_
             if error < loss_best:
                 loss_best = error
                 best_program = constr_programs[i]
+        losses.append(expected_loss/batch_size)
                         
         if (n + 1) % print_every == 0:
-            losses.append(loss/(batch_size * print_every))
             print(f"Loss: {losses[-1]}, epoch: {n+1}/{num_episodes}")
-            #print(f"Means: {pol.mu.data}, Sigmas: {pol.sigma.data}")
-            loss = 0
 
         J /= batch_size  
         optimizer.zero_grad()
@@ -402,47 +422,103 @@ def reinforce_one_set(
         if max_norm:
             torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm)
 
-        # gradients with respect tu mu and sigma
-        mu_grads.append(policy.mu.grad)
-        sigma_grads.append(policy.sigma.grad)
-
         # Apply gradients
         optimizer.step()
 
-        # learning rate decay
-        if lr_decay:
-            lr = lr_decay(lr, (n + 1), num_episodes) 
+        # Adjust learning rate
+        scheduler.step()
         
-    return np.array(losses), best_program,  np.array(epoch_mus), np.array(epoch_sigmas), \
-        np.array(epoch_n_taus), np.vstack(samples), np.vstack(mu_grads), np.vstack(sigma_grads)
+    return np.array(losses), best_program.numpy(),  np.array(epoch_mus), np.array(epoch_sigmas)
 
 
 def reinforce_delta_tau(
-        exp, 
-        policy,
-        num_episodes = 1000, 
-        batch_size = 10, 
-        lr = 1., 
+        exp: ExperimentAnalytes, 
+        policy: PolicySingleTime, 
+        delta_taus: Iterable[float], 
+        num_episodes: int = 1000, 
+        batch_size: int = 10, 
+        lr: float = 1., 
         optim = torch.optim.SGD,
-        print_every = 100,
-        lr_decay = None,
-        weights = [1., 1.],
-        baseline = 0.,
-        max_norm = 1.
+        lr_decay_factor: float = 1.,
+        lr_milestones: Union[int, Iterable[int]] = 1000,
+        print_every: int = 100,
+        weights: list = [1., 1.],
+        baseline: float = 0.,
+        max_norm: float = None,
+        beta:float = .0
     ):
+    """
+    Run Reinforcement Learning for a single set learning.
+
+    exp: ExperimentAnalytes
+        The experiment that is used to be optimized. 
+    policy: PolicySingleTime
+        The policy that learns the optimal values for the solvent
+        strength program.
+    delta_taus: Iterable[float]
+        Iterable list with the points of solvent strength change.
+        MUST be the same length as policy.n_steps
+    num_episodes = 1000
+        Number of learning steps.
+    batch_size = 10
+        Number of samples taken from the action distribution to perform 
+        Expected loss for the distribution of actions.
+    lr = 1.
+        Learning rate.
+    optim = torch.optim.SGD
+        Optimizer that performs weight update using gradients.
+        By defauld is Stochastic Gradient Descent.
+    lr_decay_factor: float
+        Learning rate decay factor used for the LRScheduler.
+        lr is updated according to lr = lr ** lr_decay_factor.
+    lr_milestones: Union[int, Iterable[int]]
+        Milestone episode/s to update the learning rate.
+        If it is int StepLR is used where lr is changed every lr_milestones.
+        If it is a list of ints then at that specific episode the lr
+        will be changed.
+    print_every = 100,
+        Number of episodes to print the average loss on.
+    weights = [1., 1.]
+        Weigths of the errors to consider, first one is for the Placement Error,
+        second one is for Overlap Error, By default both have the same wights.
+    baseline = 0.
+        Baseline value for the REINFORCE algorithm.
+    max_norm = None
+        Maximal value for the Neural Network Norm2.
+
+    Returns
+    -------
+    (losses, best_program, mus, sigmas)
+    losses: np.ndarray
+        Expected loss of the action distribution over the whole learning
+        process.
+    best_program: list
+        A list of 2 np.ndarrays first one is the phis and second is delta taus.
+        list of the phis and delta taus that had the lowest loss 
+        (based from the samples).
+        NOTE: It might not be the global minima of the loss filed because
+        the samples are not drawn from the whole loss space.
+    mus: np.ndarray
+        Mus change over the learning process. its shape is (num_episodes, policy.n_split)
+    sigmas: np.ndarray
+        Sigmas change over the learning process. its shape is (num_episodes, policy.n_split)
+    """
+
 
     losses = []
-    loss = 0
-    loss_best = 2
-    epoch_n_par = []
+    loss_best = 2 
     epoch_mus = []
     epoch_sigmas = []
+
+    # Optimizer
+    optimizer = optim(policy.parameters(), lr)
+    # LR sheduler
+    if isinstance(lr_milestones, list) or isinstance(lr_milestones, np.ndarray):
+        scheduler = MultiStepLR(optimizer, lr_milestones, gamma=lr_decay_factor)
+    else:
+        scheduler = StepLR(optimizer, lr_milestones, gamma=lr_decay_factor)
     
-    for n in range(num_episodes):          
-        
-        # Optimizer
-        optimizer = optim(policy.parameters(), lr)
-        
+    for n in range(num_episodes):                  
         # compute distribution parameters (Normal)
         mu, sigma = policy.forward()
         
@@ -463,25 +539,25 @@ def reinforce_delta_tau(
         programs[programs > 1] = 1
         programs[programs < 0] = 0
         delta_taus[delta_taus < 0] = 1e-7
+
         J = 0
-        
+        expected_loss = 0
         for i in range(batch_size):
             exp.reset()            
-            exp.run_all(programs[i].data, delta_taus[i])
-            epoch_n_par.append(len(exp.delta_taus))            
+            exp.run_all(programs[i].data, delta_taus[i])        
             
             error = exp.loss(weights)
-            loss += error
+            expected_loss += error
             J += (error - baseline) * log_prob(values[i], policy.mu, policy.sigma)
             if error < loss_best:
                 loss_best = error
                 best_program = [programs[i], delta_taus[i]]
+
+        losses.append(expected_loss/batch_size)
                         
         if (n + 1) % print_every == 0:
-            losses.append(loss/(batch_size * print_every))
             print(f"Loss: {losses[-1]}, epoch: {n+1}/{num_episodes}")
-            #print(f"Means: {pol.mu.data}, Sigmas: {pol.sigma.data}")
-            loss = 0
+
         J /= batch_size  
         optimizer.zero_grad()
         
@@ -494,59 +570,117 @@ def reinforce_delta_tau(
         # Apply gradients
         optimizer.step()
 
-        # learning rate decay
-        if lr_decay:
-            lr = lr_decay(lr, (n + 1), num_episodes) 
+        # learning rate update
+        scheduler.step()
         
-    return losses, best_program, np.array(epoch_mus), np.array(epoch_sigmas), np.array(epoch_n_par)
+    return losses, best_program, np.array(epoch_mus), np.array(epoch_sigmas)
 
 
 def reinforce_best_iso(
-        exp, 
-        policy, 
-        delta_taus, 
-        num_episodes = 1000, 
-        batch_size = 10, 
-        lr = 1., 
+        exp: ExperimentAnalytes, 
+        policy: PolicySingleISO, 
+        delta_taus: Iterable[float], 
+        num_episodes: int = 1000, 
+        batch_size: int = 10, 
+        lr: float = 1., 
         optim = torch.optim.SGD,
-        print_every = 100,
-        lr_decay = None,
-        weights = [1., 1.],
-        baseline = 0.,
-        max_norm = None,
-        beta = .0,
-        lim = 0.1
+        lr_decay_factor: float = 1.,
+        lr_milestones: Union[int, Iterable[int]] = 1000,
+        print_every: int = 100,
+        weights: list = [1., 1.],
+        baseline: float = 0.,
+        max_norm: float = None,
+        beta:float = .0,
+        lim: float = 0.1
     ):
+    """
+    Run Reinforcement Learning for a single set learning.
+
+    exp: ExperimentAnalytes
+        The experiment that is used to be optimized. 
+    policy: PolicySingleISO
+        The policy that learns the optimal values for the solvent
+        strength program.
+    delta_taus: Iterable[float]
+        Iterable list with the points of solvent strength change.
+        MUST be the same length as policy.n_steps
+    num_episodes = 1000
+        Number of learning steps.
+    batch_size = 10
+        Number of samples taken from the action distribution to perform 
+        Expected loss for the distribution of actions.
+    lr = 1.
+        Learning rate.
+    optim = torch.optim.SGD
+        Optimizer that performs weight update using gradients.
+        By defauld is Stochastic Gradient Descent.
+    lr_decay_factor: float
+        Learning rate decay factor used for the LRScheduler.
+        lr is updated according to lr = lr ** lr_decay_factor.
+    lr_milestones: Union[int, Iterable[int]]
+        Milestone episode/s to update the learning rate.
+        If it is int StepLR is used where lr is changed every lr_milestones.
+        If it is a list of ints then at that specific episode the lr
+        will be changed.
+    print_every = 100,
+        Number of episodes to print the average loss on.
+    weights = [1., 1.]
+        Weigths of the errors to consider, first one is for the Placement Error,
+        second one is for Overlap Error, By default both have the same wights.
+    baseline = 0.
+        Baseline value for the REINFORCE algorithm.
+    max_norm = None
+        Maximal value for the Neural Network Norm2.
+    beta = .0
+        Entropy Regularization term, is used for more exploration.
+        By defauld is disabled.
+    lim: float
+        The limit of the box around the ISO solution, i.e.
+        Search space = ISO_solution +- lim for every new phi dimension.
+
+    Returns
+    -------
+    (losses, best_program, mus, sigmas)
+    losses: np.ndarray
+        Expected loss of the action distribution over the whole learning
+        process.
+    best_program: np.ndarray
+        list of the phis that had the lowest loss (based from the samples).
+        NOTE: It might not be the global minima of the loss filed because
+        the samples are not drawn from the whole loss space.
+    mus: np.ndarray
+        Mus change over the learning process. its shape is (num_episodes, policy.n_split)
+    sigmas: np.ndarray
+        Sigmas change over the learning process. its shape is (num_episodes, policy.n_split)
+    """
 
     losses = []
-    loss = 3
+    expected_loss = 3
     loss_best = 2 
     epoch_mus = []
     epoch_sigmas = []
-    epoch_n_taus = []
-    samples = []
-    mu_grads = []
-    sigma_grads = []
 
 
     for phi in np.linspace(0, 1, 1000):
         exp.reset()
         exp.step(phi, 1.)
-        if exp.loss() < loss:
+        if exp.loss() < expected_loss:
             phi_iso = phi
-            loss = exp.loss()
-
-    loss = 0
+            expected_loss = exp.loss()
 
     low_lim = max(0, phi_iso - lim)
     up_lim = min(1, phi_iso + lim)
-    print(phi_iso, low_lim, up_lim)
+    print(low_lim, phi_iso, up_lim)
+
+    # Optimizer
+    optimizer = optim(policy.parameters(), lr)
+    # LR sheduler
+    if isinstance(lr_milestones, list) or isinstance(lr_milestones, np.ndarray):
+        scheduler = MultiStepLR(optimizer, lr_milestones, gamma=lr_decay_factor)
+    else:
+        scheduler = StepLR(optimizer, lr_milestones, gamma=lr_decay_factor)
     
     for n in range(num_episodes):           
-        
-        # Optimizer
-        optimizer = optim(policy.parameters(), lr)
-        
         # compute distribution parameters (Normal)
         mu, sigma = policy.forward(up_lim, low_lim)
 
@@ -561,28 +695,25 @@ def reinforce_best_iso(
         constr_programs = programs.clone()
         constr_programs[constr_programs > up_lim] = up_lim
         constr_programs[constr_programs < low_lim] = low_lim
-
-        samples.append(constr_programs)
         
         J = 0
+        expected_loss = 0
         for i in range(batch_size):
             exp.reset()            
             exp.run_all(constr_programs[i].data.numpy(), delta_taus)
-            epoch_n_taus.append(len(exp.delta_taus))
 
             error = exp.loss(weights)
-            loss += error
+            expected_loss += error
             log_prob_ = log_prob(programs[i], policy.mu, policy.sigma)
             J += (error - baseline) * log_prob_ - beta * torch.exp(log_prob_) * log_prob_
             if error < loss_best:
                 loss_best = error
                 best_program = constr_programs[i]
-                        
+        
+        losses.append(expected_loss/batch_size)
+
         if (n + 1) % print_every == 0:
-            losses.append(loss/(batch_size * print_every))
             print(f"Loss: {losses[-1]}, epoch: {n+1}/{num_episodes}")
-            #print(f"Means: {pol.mu.data}, Sigmas: {pol.sigma.data}")
-            loss = 0
 
         J /= batch_size  
         optimizer.zero_grad()
@@ -593,147 +724,107 @@ def reinforce_best_iso(
         if max_norm:
             torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm)
 
-        # gradients with respect tu mu and sigma
-        mu_grads.append(policy.mu.grad)
-        sigma_grads.append(policy.sigma.grad)
-
         # Apply gradients
         optimizer.step()
 
-        # learning rate decay
-        if lr_decay:
-            lr = lr_decay(lr, (n + 1), num_episodes) 
+        # Adjust learning rate
+        scheduler.step()
         
-    return np.array(losses), best_program,  np.array(epoch_mus), np.array(epoch_sigmas), \
-        np.array(epoch_n_taus), np.vstack(samples), np.vstack(mu_grads), np.vstack(sigma_grads)
+    return np.array(losses), best_program,  np.array(epoch_mus), np.array(epoch_sigmas)
 
-
-
-
-def reinforce_best_sample(
-        exp, 
-        policy, 
-        delta_taus, 
-        num_episodes = 1000, 
-        batch_size = 10, 
-        lr = 1., 
-        optim = torch.optim.SGD,
-        print_every = 100,
-        lr_decay = None,
-        weights = [1., 1.],
-        baseline = 0.,
-        max_norm = None,
-        beta = .0
-    ):
-
-    losses = []
-    loss = 0
-    loss_best = 2 
-    epoch_mus = []
-    epoch_sigmas = []
-    epoch_n_taus = []
-    samples = []
-    mu_grads = []
-    sigma_grads = []
-
-    
-    for n in range(num_episodes):           
-        
-        # Optimizer
-        optimizer = optim(policy.parameters(), lr)
-        
-        # compute distribution parameters (Normal)
-        mu, sigma = policy.forward()
-
-        # Save parameters
-        epoch_mus.append(policy.mu.detach().numpy())
-        epoch_sigmas.append(policy.sigma.detach().numpy())
-
-        # Sample some values from the actions distributions
-        programs = sample(mu, sigma, batch_size)
-        
-        # Fit the sampled data to the constraint [0,1]
-        constr_programs = programs.clone()
-        constr_programs[constr_programs > 1] = 1
-        constr_programs[constr_programs < 0] = 0
-
-        samples.append(constr_programs)
-        
-        J = 0
-        best = 3.
-        for i in range(batch_size):
-            exp.reset()            
-            exp.run_all(constr_programs[i].data.numpy(), delta_taus)
-            epoch_n_taus.append(len(exp.delta_taus))
-
-            error = exp.loss(weights)
-            if error < best:
-                log_prob_ = log_prob(programs[i], policy.mu, policy.sigma)
-                J = -(error - baseline) * log_prob_ - beta * torch.exp(log_prob_) * log_prob_
-                if error < loss_best:
-                    loss_best = error
-                    best_program = constr_programs[i]
-                best = error.copy()
-        loss += best
-            
-                        
-        if (n + 1) % print_every == 0:
-            losses.append(loss/(print_every))
-            print(f"Loss: {losses[-1]}, epoch: {n+1}/{num_episodes}")
-            #print(f"Means: {pol.mu.data}, Sigmas: {pol.sigma.data}")
-            loss = 0
- 
-        optimizer.zero_grad()
-        
-        # Calculate gradients
-        J.backward()
-
-        if max_norm:
-            torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm)
-
-        # gradients with respect tu mu and sigma
-        mu_grads.append(policy.mu.grad)
-        sigma_grads.append(policy.sigma.grad)
-
-        # Apply gradients
-        optimizer.step()
-
-        # learning rate decay
-        if lr_decay:
-            lr = lr_decay(lr, (n + 1), num_episodes) 
-        
-    return np.array(losses), best_program,  np.array(epoch_mus), np.array(epoch_sigmas), \
-        np.array(epoch_n_taus), np.vstack(samples), np.vstack(mu_grads), np.vstack(sigma_grads)
 
 def reinforce_gen(
-        alists, 
+        alists: Iterable[pd.DataFrame],
         policy, 
-        delta_taus, 
-        num_episodes = 1000, 
-        batch_size = 10, 
-        lr = 1., 
+        delta_taus: Iterable[float], 
+        num_episodes: int = 1000, 
+        batch_size: int = 10, 
+        lr: float = 1., 
         optim = torch.optim.SGD,
-        print_every = 100,
-        lr_decay = None,
-        weights = [1., 1.],
-        baseline = 0.,
-        max_norm = None,
-        beta = .0,
-        rand_prob = .2,
-        max_rand_analytes = 30,
-        min_rand_analytes = 10
+        lr_decay_factor: float = 1.,
+        lr_milestones: Union[int, Iterable[int]] = 1000,
+        rand_prob: float = .2,
+        max_rand_analytes: int = 30,
+        min_rand_analytes: int = 10,
+        print_every: int = 100,
+        weights: list = [1., 1.],
+        baseline: float = 0.,
+        max_norm: float = None,
+        beta: float = .0,
     ):
+    """
+    Run Reinforcement Learning for a single set learning.
+
+    alists: Iterable[pd.DataFrame]
+        A list with pd.Dataframes for each dataset used to train on. 
+    policy: PolicyGeneral
+        The policy that learns the optimal values for the solvent
+        strength program.
+    delta_taus: Iterable[float]
+        Iterable list with the points of solvent strength change.
+        MUST be the same length as policy.n_steps
+    num_episodes = 1000
+        Number of learning steps.
+    batch_size = 10
+        Number of samples taken from the action distribution to perform 
+        Expected loss for the distribution of actions.
+    lr = 1.
+        Learning rate.
+    optim = torch.optim.SGD
+        Optimizer that performs weight update using gradients.
+        By defauld is Stochastic Gradient Descent.
+    lr_decay_factor: float
+        Learning rate decay factor used for the LRScheduler.
+        lr is updated according to lr = lr ** lr_decay_factor.
+    lr_milestones: Union[int, Iterable[int]]
+        Milestone episode/s to update the learning rate.
+        If it is int StepLR is used where lr is changed every lr_milestones.
+        If it is a list of ints then at that specific episode the lr
+        will be changed.
+    rand_prob: float = .2
+        The probability to draw a random subset from all the analytes.
+        1 - rand_prob is the probability to use a "real" set (provided in
+        alists).
+    max_rand_analytes: int = 30
+        The maximum number of analytes in the randomly drawn set.
+    min_rand_analytes: int = 10
+        The minimum number of analytes in the randomly drawn set.
+    print_every = 100,
+        Number of episodes to print the average loss on.
+    weights = [1., 1.]
+        Weigths of the errors to consider, first one is for the Placement Error,
+        second one is for Overlap Error, By default both have the same wights.
+    baseline = 0.
+        Baseline value for the REINFORCE algorithm.
+    max_norm = None
+        Maximal value for the Neural Network Norm2.
+    beta = .0
+        Entropy Regularization term, is used for more exploration.
+        By defauld is disabled.
+    lim: float
+        The limit of the box around the ISO solution, i.e.
+        Search space = ISO_solution +- lim for every new phi dimension.
+
+    Returns
+    -------
+    (losses, best_program, mus, sigmas)
+    losses: np.ndarray
+        Expected loss of the action distribution over the whole learning
+        process.
+    best_program: np.ndarray
+        list of the phis that had the lowest loss (based from the samples).
+        NOTE: It might not be the global minima of the loss filed because
+        the samples are not drawn from the whole loss space.
+    mus: np.ndarray
+        Mus change over the learning process. its shape is (num_episodes, policy.n_split)
+    sigmas: np.ndarray
+        Sigmas change over the learning process. its shape is (num_episodes, policy.n_split)
+    """
 
     losses = []
-    loss = 0
-    samples = []
     exps = []
-    mus, sigmas = [], []
-    grads_mu_1 = []
-    grads_sig_1 = []
-    grads_mu_2 = []
-    grads_sig_2 = []
 
+    # Make ExperimentAnalytes object for the given analyte sets for time saving purpose
     for alist in alists:
         exps.append(ExperimentAnalytes(k0 = alist.k0.values, S = alist.S.values, h=0.001, run_time=10.0))
 
@@ -741,8 +832,17 @@ def reinforce_gen(
 
     all_analytes = pd.concat(alists, sort=True)[['k0', 'S', 'lnk0']]
 
-    
-    for n in range(num_episodes):  
+    # Optimizer
+    optimizer = optim(policy.parameters(), lr)
+
+    # LR sheduler
+    if isinstance(lr_milestones, list) or isinstance(lr_milestones, np.ndarray):
+        scheduler = MultiStepLR(optimizer, lr_milestones, gamma=lr_decay_factor)
+    else:
+        scheduler = StepLR(optimizer, lr_milestones, gamma=lr_decay_factor)
+
+    for n in range(num_episodes): 
+        # the set to use for the experiment.
         if random() < rand_prob:
             dataframe = all_analytes.sample(randint(min_rand_analytes, max_rand_analytes))
             input_data = torch.tensor(dataframe[['S', 'lnk0']].values, dtype=torch.float32)
@@ -755,16 +855,9 @@ def reinforce_gen(
             exp = exps[set_index]
             input_data = torch.tensor(alists[set_index][['S', 'lnk0']].values, dtype=torch.float32)
             #print(input_data)
-
-        # Optimizer
-        optimizer = optim(policy.parameters(), lr)
         
         # compute distribution parameters (Normal)
         mu, sigma = policy.forward(input_data)
-        #mus.append(mu.detach().numpy())
-        #sigmas.append(sigma.detach().numpy())
-        #print("mu:", mu, "sigma:", sigma)
-
 
         # Sample some values from the actions distributions
         programs = sample(mu, sigma, batch_size)
@@ -773,34 +866,27 @@ def reinforce_gen(
         constr_programs = programs.clone()
         constr_programs[constr_programs > 1] = 1
         constr_programs[constr_programs < 0] = 0
-
-        #samples.append(constr_programs)
         
         J = 0
+        expected_loss = 0
         for i in range(batch_size):
             exp.reset()            
             exp.run_all(constr_programs[i].data.numpy(), delta_taus)
 
             error = exp.loss(weights)
-            loss += error
+            expected_loss += error
             log_prob_ = log_prob(programs[i], mu, sigma)
             J += (error - baseline) * log_prob_ - beta * torch.exp(log_prob_) * log_prob_
-                        
+        
+        losses.append(expected_loss/batch_size)
+
         if (n + 1) % print_every == 0:
-            losses.append(loss/(batch_size * print_every))
             print(f"Loss: {losses[-1]}, epoch: {n+1}/{num_episodes}")
-            #print(f"Means: {pol.mu.data}, Sigmas: {pol.sigma.data}")
-            loss = 0
 
         J /= batch_size
         optimizer.zero_grad()
         # Calculate gradients
         J.backward()
-        #grads_mu_1.append(policy.fc_mu_1.weight.grad.clone())
-        #grads_sig_1.append(policy.fc_sig_1.weight.grad.clone())
-        #grads_mu_2.append(policy.fc_mu_2.weight.grad.clone())
-        #grads_sig_2.append(policy.fc_sig_2.weight.grad.clone())
-
 
         if max_norm:
             torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm)
@@ -809,7 +895,6 @@ def reinforce_gen(
         optimizer.step()
 
         # learning rate decay
-        if lr_decay:
-            lr = lr_decay(lr, (n + 1), num_episodes) 
+        sheduler.step()
         
-    return np.array(losses)#, np.vstack(samples), np.vstack(mus), np.vstack(sigmas), grads_mu_1, grads_sig_1, grads_sig_1, grads_sig_2
+    return np.array(losses)
