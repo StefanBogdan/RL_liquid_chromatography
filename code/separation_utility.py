@@ -288,6 +288,152 @@ class PolicySingleTime(nn.Module):
 
         return self.mu, self.sigma
 
+###########################################################################
+############# Some extra Modules for the Generalized Policy ###############
+###########################################################################
+
+class Rho(nn.Module):
+    def __init__(self, 
+            n_steps: int, 
+            width: int, 
+            in_dim: int = 2, 
+            sigma_max: float = .3, 
+            sigma_min: float = .1
+        ) -> None:
+        """
+        Constructor for PolicyTime torch Module.
+
+        Parameters
+        ----------
+        n_steps: int
+            Number of steps for piece-wise constant solvent strength program.
+        width: int
+            number of nodes for the intermeidate layers
+        in_dim: int
+            length of the encoded analyte set (embedding), it is the input 
+            to this network.
+        sigma_min: float
+            Minimal standard deviation of the solvent strength search space.
+            Default value .0. (max value < 1.0)
+        sigma_max: float
+            Maximal standard deviation of the solvent strength search space.
+            Default value .2. (max value is 1.0)
+        """
+        super().__init__()
+        
+        self.n_steps = n_steps
+        self.width = width
+        self.sigma_min = sigma_min
+        self.sigma_max = sigma_max
+
+        self.sig = nn.Sigmoid()
+        self.fc_mu_1 = nn.Linear(in_dim, width)
+        self.fc_mu_2 = nn.Linear(width, n_steps)
+        self.fc_sig_1 = nn.Linear(in_dim, width)
+        self.fc_sig_2 = nn.Linear(width, n_steps)
+          
+    def forward(self, x):
+        mu = F.relu(self.fc_mu_1(x))
+        sigma = F.relu(self.fc_sig_1(x))
+        
+        mu = self.sig(self.fc_mu_2(mu)).squeeze()
+        # limit sigma to be in range (sigma_min; sigma_max)
+        sigma = self.sig(self.fc_sig_2(sigma)).squeeze() * (self.sigma_max - self.sigma_min) + self.sigma_min
+        return mu, sigma
+    
+    
+class PermEqui1_max(nn.Module):
+    def __init__(self, in_dim, out_dim):
+        super(PermEqui1_max, self).__init__()
+        self.Gamma = nn.Linear(in_dim, out_dim)
+
+    def forward(self, x):
+        xm, _ = x.max(0, keepdim=True)
+        x = self.Gamma(x-xm)
+        return x
+
+class PermEqui2_max(nn.Module):
+    def __init__(self, in_dim, out_dim):
+        super(PermEqui2_max, self).__init__()
+        self.Gamma = nn.Linear(in_dim, out_dim)
+        self.Lambda = nn.Linear(in_dim, out_dim, bias=False)
+
+    def forward(self, x):
+        xm, _ = x.max(0, keepdim=True)
+        xm = self.Lambda(xm) 
+        x = self.Gamma(x)
+        x = x - xm
+        return x
+
+class PermEqui1_mean(nn.Module):
+    def __init__(self, in_dim, out_dim):
+        super(PermEqui1_mean, self).__init__()
+        self.Gamma = nn.Linear(in_dim, out_dim)
+
+    def forward(self, x):
+        xm = x.mean(0, keepdim=True)
+        x = self.Gamma(x-xm)
+        return x
+
+class PermEqui2_mean(nn.Module):
+    def __init__(self, in_dim, out_dim):
+        super(PermEqui2_mean, self).__init__()
+        self.Gamma = nn.Linear(in_dim, out_dim)
+        self.Lambda = nn.Linear(in_dim, out_dim, bias=False)
+
+    def forward(self, x):
+        xm = x.mean(0, keepdim=True)
+        xm = self.Lambda(xm) 
+        x = self.Gamma(x)
+        x = x - xm
+        return x
+
+###########################################################################
+
+
+class PolicyGeneral(nn.Module):
+    def __init__(self, 
+            phi: nn.Module,
+            rho: nn.Module
+        ) -> None:
+        """
+        Constructor for PolicyTime torch Module.
+
+        Parameters
+        ----------
+        phi: nn.Module
+            The network that encodes the analyte set to a single 
+            vector (embedding)
+        rho: nn.Module
+            The network that outputs the programe for separation
+            returns mean and standard deviation of the action space
+
+        Ex:
+        For a 4 step solvent gradient programe the generalized policy 
+        with 3 elements embedding for the analyte set and intermediate
+        layers of 5 neurons.
+        policy = PolicyGeneral(
+            phi = nn.Sequential(
+                PermEqui1_max(2, 5),
+                nn.ELU(inplace=True),
+                PermEqui1_max(5, 5),
+                nn.ELU(inplace=True),
+                PermEqui1_max(5, 3),
+                nn.ELU(inplace=True),
+            ),
+            rho = Rho(4, 5, 3, .3, .05)
+        )
+        """
+        super().__init__()
+
+        self.phi = phi
+        self.rho = rho
+        
+    def forward(self, x):
+        phi_output = self.phi(x)
+        sum_output = phi_output.mean(0, keepdim=True)
+        mu, sigma = self.rho(sum_output)
+        return mu, sigma
 
 
 def reinforce_one_set(
@@ -666,7 +812,7 @@ def reinforce_best_iso(
         exp.step(phi, 1.)
         if exp.loss() < expected_loss:
             phi_iso = phi
-            expected_loss = exp.loss()
+            expected_loss    = exp.loss()
 
     low_lim = max(0, phi_iso - lim)
     up_lim = min(1, phi_iso + lim)
@@ -735,7 +881,7 @@ def reinforce_best_iso(
 
 def reinforce_gen(
         alists: Iterable[pd.DataFrame],
-        policy, 
+        policy: PolicyGeneral, 
         delta_taus: Iterable[float], 
         num_episodes: int = 1000, 
         batch_size: int = 10, 
@@ -823,6 +969,7 @@ def reinforce_gen(
 
     losses = []
     exps = []
+    param_norms = []
 
     # Make ExperimentAnalytes object for the given analyte sets for time saving purpose
     for alist in alists:
@@ -842,6 +989,12 @@ def reinforce_gen(
         scheduler = StepLR(optimizer, lr_milestones, gamma=lr_decay_factor)
 
     for n in range(num_episodes): 
+
+        norms = []
+        for param in policy.parameters():
+            norms.append(param.norm())
+        param_norms.append(norms)
+
         # the set to use for the experiment.
         if random() < rand_prob:
             dataframe = all_analytes.sample(randint(min_rand_analytes, max_rand_analytes))
@@ -895,6 +1048,6 @@ def reinforce_gen(
         optimizer.step()
 
         # learning rate decay
-        sheduler.step()
+        scheduler.step()
         
-    return np.array(losses)
+    return np.array(losses), np.array(param_norms)
