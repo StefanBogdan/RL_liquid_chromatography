@@ -481,7 +481,7 @@ class PolicyGeneral(nn.Module):
         
     def forward(self, x):
         phi_output = self.phi(x)
-        sum_output = phi_output.mean(0, keepdim=True)
+        sum_output = phi_output.sum(0, keepdim=True)
         mu, sigma = self.rho(sum_output)
         return mu, sigma
 
@@ -496,7 +496,7 @@ def reinforce_one_set(
         policy: PolicySingle, 
         delta_taus: Iterable[float], 
         num_episodes: int = 1000, 
-        batch_size: int = 10, 
+        sample_size: int = 10, 
         lr: float = 1., 
         optim = torch.optim.SGD,
         lr_decay_factor: float = 1.,
@@ -506,7 +506,6 @@ def reinforce_one_set(
         max_norm: float = None,
         beta:float = .0,
         weights: list = [1., 1.],
-        delta_loss: bool = True,
     ):
     """
     Run Reinforcement Learning for a single set learning.
@@ -521,7 +520,7 @@ def reinforce_one_set(
         MUST be the same length as policy.n_steps
     num_episodes = 1000
         Number of learning steps.
-    batch_size = 10
+    sample_size = 10
         Number of samples taken from the action distribution to perform 
         Expected loss for the distribution of actions.
     lr = 1.
@@ -549,9 +548,6 @@ def reinforce_one_set(
     beta = .0
         Entropy Regularization term, is used for more exploration.
         By defauld is disabled.
-    delta_loss: bool = True
-        To compute the diference between curent loss and the perfect 
-        separation loss
 
     Returns
     -------
@@ -593,7 +589,7 @@ def reinforce_one_set(
         epoch_sigmas.append(sigma.detach().numpy())
 
         # Sample some values from the actions distributions
-        programs = sample(mu, sigma, batch_size)
+        programs = sample(mu, sigma, sample_size)
         
         # Fit the sampled data to the constraint [0,1]
         constr_programs = programs.clone()
@@ -602,23 +598,23 @@ def reinforce_one_set(
         
         J = 0
         expected_loss = 0
-        for i in range(batch_size):
+        for i in range(sample_size):
             exp.reset()            
             exp.run_all(constr_programs[i].data.numpy(), delta_taus)
 
-            error = exp.loss(weights, delta_loss)
+            error = exp.loss(weights)
             expected_loss += error
             log_prob_ = log_prob(programs[i], mu, sigma)
             J += (error - baseline) * log_prob_ - beta * torch.exp(log_prob_) * log_prob_
             if error < loss_best:
                 loss_best = error
                 best_program = constr_programs[i]
-        losses.append(expected_loss/batch_size)
+        losses.append(expected_loss/sample_size)
                         
         if (n + 1) % print_every == 0:
             print(f"Loss: {losses[-1]}, epoch: {n+1}/{num_episodes}")
 
-        J /= batch_size  
+        J /= sample_size  
         optimizer.zero_grad()
         
         # Calculate gradients
@@ -641,7 +637,7 @@ def reinforce_delta_tau(
         policy: PolicySingleTime, 
         delta_taus: Iterable[float], 
         num_episodes: int = 1000, 
-        batch_size: int = 10, 
+        sample_size: int = 10, 
         lr: float = 1., 
         optim = torch.optim.SGD,
         lr_decay_factor: float = 1.,
@@ -650,8 +646,7 @@ def reinforce_delta_tau(
         baseline: float = 0.,
         max_norm: float = None,
         beta:float = .0,
-        weights: list = [1., 1.],
-        delta_loss: bool = True
+        weights: list = [1., 1.]
     ):
     """
     Run Reinforcement Learning for a single set learning.
@@ -666,7 +661,7 @@ def reinforce_delta_tau(
         MUST be the same length as policy.n_steps
     num_episodes = 1000
         Number of learning steps.
-    batch_size = 10
+    sample_size = 10
         Number of samples taken from the action distribution to perform 
         Expected loss for the distribution of actions.
     lr = 1.
@@ -691,9 +686,6 @@ def reinforce_delta_tau(
         Baseline value for the REINFORCE algorithm.
     max_norm = None
         Maximal value for the Neural Network Norm2.
-    delta_loss: bool = True
-        To compute the diference between curent loss and the perfect 
-        separation loss
 
     Returns
     -------
@@ -736,7 +728,7 @@ def reinforce_delta_tau(
         epoch_sigmas.append(sigma.detach().numpy())
         
         # Sample some values from the actions distributions
-        values = sample(mu, sigma, batch_size)
+        values = sample(mu, sigma, sample_size)
 
         # Add tau for the last solvent strength (
         # runs until an analyte reaches th end of the columns
@@ -751,23 +743,23 @@ def reinforce_delta_tau(
 
         J = 0
         expected_loss = 0
-        for i in range(batch_size):
+        for i in range(sample_size):
             exp.reset()            
             exp.run_all(programs[i].data, delta_taus[i])        
             
-            error = exp.loss(weights, delta_loss)
+            error = exp.loss(weights)
             expected_loss += error
             J += (error - baseline) * log_prob(values[i], mu, sigma)
             if error < loss_best:
                 loss_best = error
                 best_program = [programs[i], delta_taus[i]]
 
-        losses.append(expected_loss/batch_size)
+        losses.append(expected_loss/sample_size)
                         
         if (n + 1) % print_every == 0:
             print(f"Loss: {losses[-1]}, epoch: {n+1}/{num_episodes}")
 
-        J /= batch_size  
+        J /= sample_size  
         optimizer.zero_grad()
         
         # Calculate gradients
@@ -790,7 +782,7 @@ def reinforce_best_iso(
         policy: PolicySingleISO, 
         delta_taus: Iterable[float], 
         num_episodes: int = 1000, 
-        batch_size: int = 10, 
+        sample_size: int = 10, 
         lr: float = 1., 
         optim = torch.optim.SGD,
         lr_decay_factor: float = 1.,
@@ -800,8 +792,7 @@ def reinforce_best_iso(
         max_norm: float = None,
         beta:float = .0,
         lim: float = 0.1,
-        weights: list = [1., 1.],
-        delta_loss: bool = True
+        weights: list = [1., 1.]
     ):
     """
     Run Reinforcement Learning for a single set learning.
@@ -816,7 +807,7 @@ def reinforce_best_iso(
         MUST be the same length as policy.n_steps
     num_episodes = 1000
         Number of learning steps.
-    batch_size = 10
+    sample_size = 10
         Number of samples taken from the action distribution to perform 
         Expected loss for the distribution of actions.
     lr = 1.
@@ -847,9 +838,6 @@ def reinforce_best_iso(
     lim: float
         The limit of the box around the ISO solution, i.e.
         Search space = ISO_solution +- lim for every new phi dimension.
-    delta_loss: bool = True
-        To compute the diference between curent loss and the perfect 
-        separation loss
 
     Returns
     -------
@@ -902,7 +890,7 @@ def reinforce_best_iso(
         epoch_sigmas.append(sigma.detach().numpy())
 
         # Sample some values from the actions distributions
-        programs = sample(mu, sigma, batch_size)
+        programs = sample(mu, sigma, sample_size)
         
         # Fit the sampled data to the constraint [0,1]
         constr_programs = programs.clone()
@@ -911,11 +899,11 @@ def reinforce_best_iso(
         
         J = 0
         expected_loss = 0
-        for i in range(batch_size):
+        for i in range(sample_size):
             exp.reset()            
             exp.run_all(constr_programs[i].data.numpy(), delta_taus)
 
-            error = exp.loss(weights, delta_loss)
+            error = exp.loss(weights)
             expected_loss += error
             log_prob_ = log_prob(programs[i], mu, sigma)
             J += (error - baseline) * log_prob_ - beta * torch.exp(log_prob_) * log_prob_
@@ -923,12 +911,12 @@ def reinforce_best_iso(
                 loss_best = error
                 best_program = constr_programs[i]
         
-        losses.append(expected_loss/batch_size)
+        losses.append(expected_loss/sample_size)
 
         if (n + 1) % print_every == 0:
             print(f"Loss: {losses[-1]}, epoch: {n+1}/{num_episodes}")
 
-        J /= batch_size  
+        J /= sample_size  
         optimizer.zero_grad()
         
         # Calculate gradients
@@ -951,7 +939,8 @@ def reinforce_gen(
         policy: PolicyGeneral, 
         delta_taus: Iterable[float], 
         num_episodes: int = 1000, 
-        batch_size: int = 10, 
+        sample_size: int = 10,
+        batch_size : int = 10,
         lr: float = 1., 
         optim = torch.optim.SGD,
         lr_decay_factor: float = 1.,
@@ -963,8 +952,7 @@ def reinforce_gen(
         baseline: float = 0.,
         max_norm: float = None,
         beta: float = .0,
-        weights: list = [1., 1.],
-        delta_loss: bool = True,
+        weights: list = [1., 1.]
     ):
     """
     Run Reinforcement Learning for a single set learning.
@@ -979,9 +967,11 @@ def reinforce_gen(
         MUST be the same length as policy.n_steps
     num_episodes = 1000
         Number of learning steps.
-    batch_size = 10
+    sample_size = 10
         Number of samples taken from the action distribution to perform 
         Expected loss for the distribution of actions.
+    batch_size:
+        Number of experiments to run in order to aproximate the true gradient.
     lr = 1.
         Learning rate.
     optim = torch.optim.SGD
@@ -1015,32 +1005,17 @@ def reinforce_gen(
     beta = .0
         Entropy Regularization term, is used for more exploration.
         By defauld is disabled.
-    lim: float
-        The limit of the box around the ISO solution, i.e.
-        Search space = ISO_solution +- lim for every new phi dimension.
-    delta_loss: bool = True
-        To compute the diference between curent loss and the perfect 
-        separation loss
-
     Returns
     -------
     (losses, best_program, mus, sigmas)
     losses: np.ndarray
         Expected loss of the action distribution over the whole learning
         process.
-    best_program: np.ndarray
-        list of the phis that had the lowest loss (based from the samples).
-        NOTE: It might not be the global minima of the loss filed because
-        the samples are not drawn from the whole loss space.
-    mus: np.ndarray
-        Mus change over the learning process. its shape is (num_episodes, policy.n_split)
-    sigmas: np.ndarray
-        Sigmas change over the learning process. its shape is (num_episodes, policy.n_split)
     """
 
     losses = []
+    perfect_loss = []
     exps = []
-    param_norms = []
 
     # Make ExperimentAnalytes object for the given analyte sets for time saving purpose
     for alist in alists:
@@ -1059,13 +1034,9 @@ def reinforce_gen(
     else:
         scheduler = StepLR(optimizer, lr_milestones, gamma=lr_decay_factor)
 
-    for n in range(num_episodes): 
+    J_batch = 0
 
-        norms = []
-        for param in policy.parameters():
-            norms.append(param.norm())
-        param_norms.append(norms)
-
+    for n in range(num_episodes):
         # the set to use for the experiment.
         if random() < rand_prob:
             dataframe = all_analytes.sample(randint(min_rand_analytes, max_rand_analytes))
@@ -1075,16 +1046,15 @@ def reinforce_gen(
         else:
             # Choose a random set
             set_index = randint(0, num_exps - 1) 
-            #print(set_index)
             exp = exps[set_index]
             input_data = torch.tensor(alists[set_index][['S', 'lnk0']].values, dtype=torch.float32)
-            #print(input_data)
+            
         
         # compute distribution parameters (Normal)
         mu, sigma = policy.forward(input_data)
 
         # Sample some values from the actions distributions
-        programs = sample(mu, sigma, batch_size)
+        programs = sample(mu, sigma, sample_size)
         
         # Fit the sampled data to the constraint [0,1]
         constr_programs = programs.clone()
@@ -1093,42 +1063,47 @@ def reinforce_gen(
         
         J = 0
         expected_loss = 0
-        for i in range(batch_size):
+        for i in range(sample_size):
             exp.reset()            
             exp.run_all(constr_programs[i].data.numpy(), delta_taus)
 
-            error = exp.loss(weights, delta_loss)
+            error = exp.loss(weights)
             expected_loss += error
             log_prob_ = log_prob(programs[i], mu, sigma)
             J += (error - baseline) * log_prob_ - beta * torch.exp(log_prob_) * log_prob_
         
-        losses.append(expected_loss/batch_size)
-
+        losses.append(expected_loss/sample_size)
+        perfect_loss.append(exp.perfect_loss(weights))
         if (n + 1) % print_every == 0:
             print(f"Loss: {losses[-1]}, epoch: {n+1}/{num_episodes}")
 
-        J /= batch_size
-        optimizer.zero_grad()
-        # Calculate gradients
-        J.backward()
+        J_batch += J/sample_size
+        if (i + 1) % batch_size == 0:
+            J_batch /= batch_size
+            optimizer.zero_grad()
+            # Calculate gradients
+            J_batch.backward()
 
-        if max_norm:
-            torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm)
+            if max_norm:
+                torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm)
 
-        # Apply gradients
-        optimizer.step()
+            # Apply gradients
+            optimizer.step()
 
-        # learning rate decay
-        scheduler.step()
+            # learning rate decay
+            scheduler.step()
+
+            J_batch = 0
         
-    return np.array(losses), np.array(param_norms)
+    return np.array(losses), np.array(perfect_loss)
+
 
 def reinforce_single_from_gen(
         alist: pd.DataFrame, 
         policy: PolicyGeneral, 
         delta_taus: Iterable[float], 
         num_episodes: int = 1000, 
-        batch_size: int = 10, 
+        sample_size: int = 10, 
         lr: float = 1., 
         optim = torch.optim.SGD,
         lr_decay_factor: float = 1.,
@@ -1137,8 +1112,7 @@ def reinforce_single_from_gen(
         baseline: float = 0.,
         max_norm: float = None,
         beta:float = .0,
-        weights: list = [1., 1.],
-        delta_loss: bool = True
+        weights: list = [1., 1.]
     ):
     """
     Run Reinforcement Learning for a single set learning.
@@ -1154,7 +1128,7 @@ def reinforce_single_from_gen(
         MUST be the same length as policy.n_steps
     num_episodes = 1000
         Number of learning steps.
-    batch_size = 10
+    sample_size = 10
         Number of samples taken from the action distribution to perform 
         Expected loss for the distribution of actions.
     lr = 1.
@@ -1182,9 +1156,6 @@ def reinforce_single_from_gen(
     beta = .0
         Entropy Regularization term, is used for more exploration.
         By defauld is disabled.
-    delta_loss: bool = True
-        To compute the diference between curent loss and the perfect 
-        separation loss
 
     Returns
     -------
@@ -1231,7 +1202,7 @@ def reinforce_single_from_gen(
         epoch_sigmas.append(sigma.detach().numpy())
 
         # Sample some values from the actions distributions
-        programs = sample(mu, sigma, batch_size)
+        programs = sample(mu, sigma, sample_size)
         
         # Fit the sampled data to the constraint [0,1]
         constr_programs = programs.clone()
@@ -1240,23 +1211,23 @@ def reinforce_single_from_gen(
         
         J = 0
         expected_loss = 0
-        for i in range(batch_size):
+        for i in range(sample_size):
             exp.reset()            
             exp.run_all(constr_programs[i].data.numpy(), delta_taus)
 
-            error = exp.loss(weights, delta_loss)
+            error = exp.loss(weights)
             expected_loss += error
             log_prob_ = log_prob(programs[i], mu, sigma)
             J += (error - baseline) * log_prob_ - beta * torch.exp(log_prob_) * log_prob_
             if error < loss_best:
                 loss_best = error
                 best_program = constr_programs[i]
-        losses.append(expected_loss/batch_size)
+        losses.append(expected_loss/sample_size)
                         
         if (n + 1) % print_every == 0:
             print(f"Loss: {losses[-1]}, epoch: {n+1}/{num_episodes}")
 
-        J /= batch_size  
+        J /= sample_size  
         optimizer.zero_grad()
 
         # Calculate gradients
@@ -1278,7 +1249,7 @@ def reinforce_delta_tau_gen(
         alists: Iterable[pd.DataFrame],
         policy: PolicyGeneral,
         num_episodes: int = 1000, 
-        batch_size: int = 10, 
+        sample_size: int = 10, 
         lr: float = 1., 
         optim = torch.optim.SGD,
         lr_decay_factor: float = 1.,
@@ -1290,8 +1261,7 @@ def reinforce_delta_tau_gen(
         baseline: float = 0.,
         max_norm: float = None,
         beta: float = .0,
-        weights: list = [1., 1.],
-        delta_loss: bool = True,
+        weights: list = [1., 1.]
     ):
     """
     Run Reinforcement Learning for a single set learning.
@@ -1303,7 +1273,7 @@ def reinforce_delta_tau_gen(
         strength program.
     num_episodes = 1000
         Number of learning steps.
-    batch_size = 10
+    sample_size = 10
         Number of samples taken from the action distribution to perform 
         Expected loss for the distribution of actions.
     lr = 1.
@@ -1342,9 +1312,6 @@ def reinforce_delta_tau_gen(
     lim: float
         The limit of the box around the ISO solution, i.e.
         Search space = ISO_solution +- lim for every new phi dimension.
-    delta_loss: bool = True
-        To compute the diference between curent loss and the perfect 
-        separation loss
 
     Returns
     -------
@@ -1364,7 +1331,6 @@ def reinforce_delta_tau_gen(
 
     losses = []
     exps = []
-    param_norms = []
 
     # Make ExperimentAnalytes object for the given analyte sets for time saving purpose
     for alist in alists:
@@ -1383,13 +1349,7 @@ def reinforce_delta_tau_gen(
     else:
         scheduler = StepLR(optimizer, lr_milestones, gamma=lr_decay_factor)
 
-    for n in range(num_episodes): 
-
-        norms = []
-        for param in policy.parameters():
-            norms.append(param.norm())
-        param_norms.append(norms)
-
+    for n in range(num_episodes):
         # the set to use for the experiment.
         if random() < rand_prob:
             dataframe = all_analytes.sample(randint(min_rand_analytes, max_rand_analytes))
@@ -1408,7 +1368,7 @@ def reinforce_delta_tau_gen(
         mu, sigma = policy.forward(input_data)
 
         # Sample some values from the actions distributions
-        values = sample(mu, sigma, batch_size)
+        values = sample(mu, sigma, sample_size)
 
         # Add tau for the last solvent strength (
         # runs until an analyte reaches th end of the columns
@@ -1423,21 +1383,21 @@ def reinforce_delta_tau_gen(
         
         J = 0
         expected_loss = 0
-        for i in range(batch_size):
+        for i in range(sample_size):
             exp.reset()            
             exp.run_all(constr_programs[i], delta_taus[i])
 
-            error = exp.loss(weights, delta_loss)
+            error = exp.loss(weights)
             expected_loss += error
             log_prob_ = log_prob(values[i], mu, sigma)
             J += (error - baseline) * log_prob_ - beta * torch.exp(log_prob_) * log_prob_
         
-        losses.append(expected_loss/batch_size)
+        losses.append(expected_loss/sample_size)
 
         if (n + 1) % print_every == 0:
             print(f"Loss: {losses[-1]}, epoch: {n+1}/{num_episodes}")
 
-        J /= batch_size
+        J /= sample_size
         optimizer.zero_grad()
         # Calculate gradients
         J.backward()
@@ -1451,14 +1411,14 @@ def reinforce_delta_tau_gen(
         # learning rate decay
         scheduler.step()
         
-    return np.array(losses), np.array(param_norms)
+    return np.array(losses)
 
 
 def reinforce_single_from_delta_tau_gen(
         alist: pd.DataFrame, 
         policy: PolicyGeneral,
         num_episodes: int = 1000, 
-        batch_size: int = 10, 
+        sample_size: int = 10, 
         lr: float = 1., 
         optim = torch.optim.SGD,
         lr_decay_factor: float = 1.,
@@ -1468,7 +1428,6 @@ def reinforce_single_from_delta_tau_gen(
         max_norm: float = None,
         beta:float = .0,
         weights: list = [1., 1.],
-        delta_loss: bool = True,
     ):
     """
     Run Reinforcement Learning for a single set learning.
@@ -1481,7 +1440,7 @@ def reinforce_single_from_delta_tau_gen(
         This policy is the starting point of learning.
     num_episodes = 1000
         Number of learning steps.
-    batch_size = 10
+    sample_size = 10
         Number of samples taken from the action distribution to perform 
         Expected loss for the distribution of actions.
     lr = 1.
@@ -1509,9 +1468,6 @@ def reinforce_single_from_delta_tau_gen(
     beta = .0
         Entropy Regularization term, is used for more exploration.
         By defauld is disabled.
-    delta_loss: bool = True
-        To compute the diference between curent loss and the perfect 
-        separation loss
 
     Returns
     -------
@@ -1559,7 +1515,7 @@ def reinforce_single_from_delta_tau_gen(
         epoch_sigmas.append(sigma.detach().numpy())
 
         # Sample some values from the actions distributions
-        values = sample(mu, sigma, batch_size)
+        values = sample(mu, sigma, sample_size)
 
         # Add tau for the last solvent strength (
         # runs until an analyte reaches th end of the columns
@@ -1574,23 +1530,23 @@ def reinforce_single_from_delta_tau_gen(
         
         J = 0
         expected_loss = 0
-        for i in range(batch_size):
+        for i in range(sample_size):
             exp.reset()            
             exp.run_all(constr_programs[i], delta_taus[i])
 
-            error = exp.loss(weights, delta_loss)
+            error = exp.loss(weights)
             expected_loss += error
             log_prob_ = log_prob(values[i], mu, sigma)
             J += (error - baseline) * log_prob_ - beta * torch.exp(log_prob_) * log_prob_
             if error < loss_best:
                 loss_best = error
                 best_program = [constr_programs[i], delta_taus[i]]
-        losses.append(expected_loss/batch_size)
+        losses.append(expected_loss/sample_size)
                         
         if (n + 1) % print_every == 0:
             print(f"Loss: {losses[-1]}, epoch: {n+1}/{num_episodes}")
 
-        J /= batch_size  
+        J /= sample_size  
         optimizer.zero_grad()
         
         # Calculate gradients

@@ -377,7 +377,6 @@ class ExperimentAnalytes(object):
     def loss(
             self,
             weights=[1., 1.],
-            delta_loss=True
         ):
         """
         Compute loss of the Experiment based on placement error and overlap error.
@@ -387,19 +386,27 @@ class ExperimentAnalytes(object):
         weights: list
             Weigths of the errors to consider, first one is for the Placement Error,
             second one is for Overlap Error, By default both have the same wights.
-        delta_loss: bool
-            to compute the diference between curent loss and the perfect separation loss
         """
 
-        perfect_separation_pos = self.even_space_positions
-        perfect_separation_loss = 0
-        if delta_loss:
-            perfect_separation_loss = (
-                overlap_error(perfect_separation_pos, perfect_separation_pos * np.sqrt(self.h))
-                )
-
         return (
-            weights[0] * placement_error(self.positions[-1], perfect_separation_pos) + 
-            weights[1] * (overlap_error(self.positions[-1], self.sig) -
-                perfect_separation_loss)
+            weights[0] * placement_error(self.positions[-1], self.even_space_positions) + 
+            weights[1] * overlap_error(self.positions[-1], self.sig)
         )
+
+
+    def perfect_loss(
+            self,
+            weights=[1., 1.],
+        ):
+        """
+        Compute loss of the Experiment based on placement error and overlap error.
+
+        Parameters
+        ----------
+        weights: list
+            Weigths of the errors to consider, first one is for the Placement Error,
+            second one is for Overlap Error, By default both have the same wights.
+        """
+
+        return weights[1] * overlap_error(self.even_space_positions, 
+                            self.even_space_positions * np.sqrt(self.h))
