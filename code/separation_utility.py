@@ -149,12 +149,12 @@ class PolicySingle(nn.Module):
         """
 
         out = torch.ones((1,1))
-        self.mu = self.sig(self.fc_mu(out)).squeeze()
+        mu = self.sig(self.fc_mu(out)).squeeze()
 
         # limit sigma to be in range (sigma_min; sigma_max)
-        self.sigma = self.sig(self.fc_sigma(out)).squeeze() * (self.sigma_max - self.sigma_min) + self.sigma_min
+        sigma = self.sig(self.fc_sigma(out)).squeeze() * (self.sigma_max - self.sigma_min) + self.sigma_min
         
-        return self.mu, self.sigma
+        return mu, sigma
 
 
 class PolicySingleISO(nn.Module):
@@ -220,15 +220,11 @@ class PolicySingleISO(nn.Module):
         """
         
         out = torch.ones((1,1))
-        self.mu = self.sig(self.fc_mu(out)).squeeze() * (up_lim - low_lim) + low_lim
+        mu = self.sig(self.fc_mu(out)).squeeze() * (up_lim - low_lim) + low_lim
         # limit sigma to be in range (sigma_min; sigma_max)
-        self.sigma = self.sig(self.fc_sigma(out)).squeeze() * (self.sigma_max - self.sigma_min) + self.sigma_min
-
-        # retain grad for both mu and sigma
-        self.mu.retain_grad()
-        self.sigma.retain_grad()
+        sigma = self.sig(self.fc_sigma(out)).squeeze() * (self.sigma_max - self.sigma_min) + self.sigma_min
         
-        return self.mu, self.sigma
+        return mu, sigma
 
 
 class PolicySingleTime(nn.Module):
@@ -284,10 +280,10 @@ class PolicySingleTime(nn.Module):
             Means and standard deviations of the action space.
         """
         out = torch.ones((1,1))
-        self.mu = self.sig(self.fc_mu(out)).squeeze() 
-        self.sigma = self.softplus(self.fc_sigma(out)).squeeze() * (self.sigma_max - self.sigma_min) + self.sigma_min
+        mu = self.sig(self.fc_mu(out)).squeeze() 
+        sigma = self.softplus(self.fc_sigma(out)).squeeze() * (self.sigma_max - self.sigma_min) + self.sigma_min
 
-        return self.mu, self.sigma
+        return mu, sigma
 
 ###########################################################################
 ############# Some extra Modules for the Generalized Policy ###############
