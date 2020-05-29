@@ -932,6 +932,7 @@ def reinforce_best_iso(
 
 def reinforce_gen(
         alists: Iterable[pd.DataFrame],
+        test_alist: pd.DataFrame,
         policy: PolicyGeneral, 
         delta_taus: Iterable[float], 
         num_episodes: int = 1000, 
@@ -1011,6 +1012,7 @@ def reinforce_gen(
 
     losses = []
     perfect_loss = []
+    losses_test = []
     exps = []
 
     # Make ExperimentAnalytes object for the given analyte sets for time saving purpose
@@ -1044,8 +1046,15 @@ def reinforce_gen(
             set_index = randint(0, num_exps - 1) 
             exp = exps[set_index]
             input_data = torch.tensor(alists[set_index][['S', 'lnk0']].values, dtype=torch.float32)
-            
-        
+
+        if isinstance(test_alist, pd.DataFrame):
+            test_dataframe = test_alist.sample(randint(min_rand_analytes, max_rand_analytes))
+            test_data = torch.tensor(test_dataframe[['S', 'lnk0']].values, dtype=torch.float32)
+            test_exp = ExperimentAnalytes(k0 = test_dataframe.k0.values, S = test_dataframe.S.values, h=0.001, run_time=10.0)
+            mu, _ = policy.forward(test_data)
+            test_exp.run_all(mu.data.numpy(), delta_taus)
+            losses_test.append(test_exp.loss(weights) - test_exp.perfect_loss(weights))
+
         # compute distribution parameters (Normal)
         mu, sigma = policy.forward(input_data)
 
@@ -1068,8 +1077,7 @@ def reinforce_gen(
             log_prob_ = log_prob(programs[i], mu, sigma)
             J += (error - baseline) * log_prob_ - beta * torch.exp(log_prob_) * log_prob_
         
-        losses.append(expected_loss/sample_size)
-        perfect_loss.append(exp.perfect_loss(weights))
+        losses.append(expected_loss/sample_size - exp.perfect_loss(weights))
         if (n + 1) % print_every == 0:
             print(f"Loss: {losses[-1]}, epoch: {n+1}/{num_episodes}")
 
@@ -1091,7 +1099,7 @@ def reinforce_gen(
 
             J_batch = 0
         
-    return np.array(losses), np.array(perfect_loss)
+    return np.array(losses), np.array(losses_test)
 
 
 def reinforce_single_from_gen(
