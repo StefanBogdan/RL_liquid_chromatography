@@ -149,10 +149,10 @@ class PolicySingle(nn.Module):
         """
 
         out = torch.ones((1,1))
-        mu = self.sig(self.fc_mu(out)).squeeze()
+        mu = self.sig(self.fc_mu(out)).squeeze(0)
 
         # limit sigma to be in range (sigma_min; sigma_max)
-        sigma = self.sig(self.fc_sigma(out)).squeeze() * (self.sigma_max - self.sigma_min) + self.sigma_min
+        sigma = self.sig(self.fc_sigma(out)).squeeze(0) * (self.sigma_max - self.sigma_min) + self.sigma_min
         
         return mu, sigma
 
@@ -220,9 +220,9 @@ class PolicySingleISO(nn.Module):
         """
         
         out = torch.ones((1,1))
-        mu = self.sig(self.fc_mu(out)).squeeze() * (up_lim - low_lim) + low_lim
+        mu = self.sig(self.fc_mu(out)).squeeze(0) * (up_lim - low_lim) + low_lim
         # limit sigma to be in range (sigma_min; sigma_max)
-        sigma = self.sig(self.fc_sigma(out)).squeeze() * (self.sigma_max - self.sigma_min) + self.sigma_min
+        sigma = self.sig(self.fc_sigma(out)).squeeze(0) * (self.sigma_max - self.sigma_min) + self.sigma_min
         
         return mu, sigma
 
@@ -280,8 +280,8 @@ class PolicySingleTime(nn.Module):
             Means and standard deviations of the action space.
         """
         out = torch.ones((1,1))
-        mu = self.sig(self.fc_mu(out)).squeeze() 
-        sigma = self.softplus(self.fc_sigma(out)).squeeze() * (self.sigma_max - self.sigma_min) + self.sigma_min
+        mu = self.sig(self.fc_mu(out)).squeeze(0) 
+        sigma = self.softplus(self.fc_sigma(out)).squeeze(0) * (self.sigma_max - self.sigma_min) + self.sigma_min
 
         return mu, sigma
 
@@ -333,9 +333,9 @@ class Rho(nn.Module):
         mu = F.relu(self.fc_mu_1(x))
         sigma = F.relu(self.fc_sig_1(x))
         
-        mu = self.sig(self.fc_mu_2(mu)).squeeze()
+        mu = self.sig(self.fc_mu_2(mu)).squeeze(0)
         # limit sigma to be in range (sigma_min; sigma_max)
-        sigma = self.sig(self.fc_sig_2(sigma)).squeeze() * (self.sigma_max - self.sigma_min) + self.sigma_min
+        sigma = self.sig(self.fc_sig_2(sigma)).squeeze(0) * (self.sigma_max - self.sigma_min) + self.sigma_min
         return mu, sigma
  
 
@@ -383,9 +383,9 @@ class RhoTime(nn.Module):
         mu = F.relu(self.fc_mu_1(x))
         sigma = F.relu(self.fc_sig_1(x))
         
-        mu = self.sig(self.fc_mu_2(mu)).squeeze()
+        mu = self.sig(self.fc_mu_2(mu)).squeeze(0)
         # limit sigma to be in range (sigma_min; sigma_max)
-        sigma = self.sig(self.fc_sig_2(sigma)).squeeze() * (self.sigma_max - self.sigma_min) + self.sigma_min
+        sigma = self.sig(self.fc_sig_2(sigma)).squeeze(0) * (self.sigma_max - self.sigma_min) + self.sigma_min
         return mu, sigma
     
 class PermEqui1_max(nn.Module):
