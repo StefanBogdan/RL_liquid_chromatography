@@ -932,9 +932,9 @@ def reinforce_best_iso(
 
 def reinforce_gen(
         alists: Iterable[pd.DataFrame],
-        test_alist: pd.DataFrame,
         policy: PolicyGeneral, 
-        delta_taus: Iterable[float], 
+        delta_taus: Iterable[float],
+        test_alist: pd.DataFrame = None,
         num_episodes: int = 1000, 
         sample_size: int = 10,
         batch_size : int = 10,
@@ -949,10 +949,12 @@ def reinforce_gen(
         baseline: float = 0.,
         max_norm: float = None,
         beta: float = .0,
-        weights: list = [1., 1.]
+        weights: list = [1., 1.],
+        h = .001,
+        run_time = 10.,
     ):
     """
-    Run Reinforcement Learning for a single set learning.
+    Run Reinforcement Learning Generalized Set.
 
     alists: Iterable[pd.DataFrame]
         A list with pd.Dataframes for each dataset used to train on. 
@@ -961,7 +963,11 @@ def reinforce_gen(
         strength program.
     delta_taus: Iterable[float]
         Iterable list with the points of solvent strength change.
-        MUST be the same length as policy.n_steps
+        MUST be the same length as policy.n_steps.
+    test_alist: pd.DataFrame = None
+        A dataframe with analytes to test on. All the sets are drawn randomly
+        from this dataframe. Number of analytes is the same as for training
+        (see min_rand_analytes, max_rand_analytes).
     num_episodes = 1000
         Number of learning steps.
     sample_size = 10
@@ -1002,22 +1008,30 @@ def reinforce_gen(
     beta = .0
         Entropy Regularization term, is used for more exploration.
         By defauld is disabled.
+    h = .001
+        Theoretical plate hight for the separation experiment.
+    run_time = 10.
+        The maximal amount of time to run individual experiments.
+        (Can be None, which means until one analyte arrives at the end of the column - 2 sigma)
     Returns
     -------
-    (losses, best_program, mus, sigmas)
-    losses: np.ndarray
-        Expected loss of the action distribution over the whole learning
-        process.
+    (losses_train, losses_test)
+    losses_train: np.ndarray
+        Expected training loss of the action distribution over the whole learning
+        process. (relative loss = absolute loss - perfect separation loss)
+    losses_test: np.ndarray
+        Expected testing loss of the action distribution over the whole learning
+        process. (relative loss = absolute loss - perfect separation loss)
     """
 
-    losses = []
+    losses_train = []
     perfect_loss = []
     losses_test = []
     exps = []
 
     # Make ExperimentAnalytes object for the given analyte sets for time saving purpose
     for alist in alists:
-        exps.append(ExperimentAnalytes(k0 = alist.k0.values, S = alist.S.values, h=0.001, run_time=10.0))
+        exps.append(ExperimentAnalytes(k0 = alist.k0.values, S = alist.S.values, h=h, run_time=run_time))
 
     num_exps = len(alists)
 
@@ -1050,7 +1064,7 @@ def reinforce_gen(
         if isinstance(test_alist, pd.DataFrame):
             test_dataframe = test_alist.sample(randint(min_rand_analytes, max_rand_analytes))
             test_data = torch.tensor(test_dataframe[['S', 'lnk0']].values, dtype=torch.float32)
-            test_exp = ExperimentAnalytes(k0 = test_dataframe.k0.values, S = test_dataframe.S.values, h=0.001, run_time=10.0)
+            test_exp = ExperimentAnalytes(k0 = test_dataframe.k0.values, S = test_dataframe.S.values, h=h, run_time=run_time)
             mu, _ = policy.forward(test_data)
             test_exp.run_all(mu.data.numpy(), delta_taus)
             losses_test.append(test_exp.loss(weights) - test_exp.perfect_loss(weights))
@@ -1077,9 +1091,9 @@ def reinforce_gen(
             log_prob_ = log_prob(programs[i], mu, sigma)
             J += (error - baseline) * log_prob_ - beta * torch.exp(log_prob_) * log_prob_
         
-        losses.append(expected_loss/sample_size - exp.perfect_loss(weights))
+        losses_train.append(expected_loss/sample_size - exp.perfect_loss(weights))
         if (n + 1) % print_every == 0:
-            print(f"Loss: {losses[-1]}, epoch: {n+1}/{num_episodes}")
+            print(f"Training Loss: {losses_train[-1]}, epoch: {n+1}/{num_episodes}")
 
         J_batch += J/sample_size
         if (i + 1) % batch_size == 0:
@@ -1099,7 +1113,7 @@ def reinforce_gen(
 
             J_batch = 0
         
-    return np.array(losses), np.array(losses_test)
+    return np.array(losses_train), np.array(losses_test)
 
 
 def reinforce_single_from_gen(
@@ -1116,10 +1130,13 @@ def reinforce_single_from_gen(
         baseline: float = 0.,
         max_norm: float = None,
         beta:float = .0,
-        weights: list = [1., 1.]
+        weights: list = [1., 1.],
+        h = .001,
+        run_time = 10.
     ):
     """
-    Run Reinforcement Learning for a single set learning.
+    Run Reinforcement Learning from Generalized Model to Single Set
+    Fine Tuning.
 
     alist: od.DataFrame
         DataFrame with 'S', k0' and 'lnk0' information of the analyte set 
@@ -1160,6 +1177,11 @@ def reinforce_single_from_gen(
     beta = .0
         Entropy Regularization term, is used for more exploration.
         By defauld is disabled.
+    h = .001
+        Theoretical plate hight for the separation experiment.
+    run_time = 10.
+        The maximal amount of time to run individual experiments.
+        (Can be None, which means until one analyte arrives at the end of the column - 2 sigma)
 
     Returns
     -------
@@ -1180,7 +1202,7 @@ def reinforce_single_from_gen(
     encoding = (policy.phi(torch.tensor(alist[['S', 'lnk0']].values, dtype=torch.float32))).mean(0, keepdim=True).detach()
     policy = deepcopy(policy.rho)
 
-    exp = ExperimentAnalytes(k0=alist.k0.values, S=alist.S.values, h=0.001, run_time=10.0)
+    exp = ExperimentAnalytes(k0=alist.k0.values, S=alist.S.values, h=h, run_time=run_time)
 
 
     losses = []
@@ -1252,6 +1274,7 @@ def reinforce_single_from_gen(
 def reinforce_delta_tau_gen(
         alists: Iterable[pd.DataFrame],
         policy: PolicyGeneral,
+        
         num_episodes: int = 1000, 
         sample_size: int = 10, 
         lr: float = 1., 
@@ -1265,10 +1288,12 @@ def reinforce_delta_tau_gen(
         baseline: float = 0.,
         max_norm: float = None,
         beta: float = .0,
-        weights: list = [1., 1.]
+        weights: list = [1., 1.],
+        h = .001,
+        run_time = 10.
     ):
     """
-    Run Reinforcement Learning for a single set learning.
+    Run Reinforcement Learning Generalized with delta Tau as variable.
 
     alists: Iterable[pd.DataFrame]
         A list with pd.Dataframes for each dataset used to train on. 
@@ -1313,24 +1338,19 @@ def reinforce_delta_tau_gen(
     beta = .0
         Entropy Regularization term, is used for more exploration.
         By defauld is disabled.
-    lim: float
-        The limit of the box around the ISO solution, i.e.
-        Search space = ISO_solution +- lim for every new phi dimension.
+    h = .001
+        Theoretical plate hight for the separation experiment.
+    run_time = 10.
+        The maximal amount of time to run individual experiments.
+        (Can be None, which means until one analyte arrives at the end of the column - 2 sigma)
 
     Returns
     -------
-    (losses, best_program, mus, sigmas)
+    losses
     losses: np.ndarray
-        Expected loss of the action distribution over the whole learning
+        Expected training loss of the action distribution over the whole learning
         process.
-    best_program: np.ndarray
-        list of the phis and delta taus that had the lowest loss (based from the samples).
-        NOTE: It might not be the global minima of the loss filed because
-        the samples are not drawn from the whole loss space.
-    mus: np.ndarray
-        Mus change over the learning process. its shape is (num_episodes, policy.n_split)
-    sigmas: np.ndarray
-        Sigmas change over the learning process. its shape is (num_episodes, policy.n_split)
+
     """
 
     losses = []
@@ -1338,7 +1358,7 @@ def reinforce_delta_tau_gen(
 
     # Make ExperimentAnalytes object for the given analyte sets for time saving purpose
     for alist in alists:
-        exps.append(ExperimentAnalytes(k0 = alist.k0.values, S = alist.S.values, h=0.001, run_time=10.0))
+        exps.append(ExperimentAnalytes(k0 = alist.k0.values, S = alist.S.values, h=h, run_time=run_time))
 
     num_exps = len(alists)
 
