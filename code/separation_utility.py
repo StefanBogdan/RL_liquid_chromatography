@@ -631,7 +631,6 @@ def reinforce_one_set(
 def reinforce_delta_tau(
         exp: ExperimentAnalytes, 
         policy: PolicySingleTime, 
-        delta_taus: Iterable[float], 
         num_episodes: int = 1000, 
         sample_size: int = 10, 
         lr: float = 1., 
@@ -652,9 +651,6 @@ def reinforce_delta_tau(
     policy: PolicySingleTime
         The policy that learns the optimal values for the solvent
         strength program.
-    delta_taus: Iterable[float]
-        Iterable list with the points of solvent strength change.
-        MUST be the same length as policy.n_steps
     num_episodes = 1000
         Number of learning steps.
     sample_size = 10
