@@ -1049,7 +1049,7 @@ def reinforce_gen(
         if random() < rand_prob:
             dataframe = all_analytes.sample(randint(min_rand_analytes, max_rand_analytes))
             input_data = torch.tensor(dataframe[['S', 'lnk0']].values, dtype=torch.float32)
-            exp = ExperimentAnalytes(k0 = dataframe.k0.values, S = dataframe.S.values, h=0.001, run_time=10.0)
+            exp = ExperimentAnalytes(k0 = dataframe.k0.values, S = dataframe.S.values, h=h, run_time=run_time)
 
         else:
             # Choose a random set
