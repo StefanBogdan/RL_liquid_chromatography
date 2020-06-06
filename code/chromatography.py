@@ -182,6 +182,7 @@ class ExperimentAnalytes(object):
         self.phis = []
         self.delta_taus = []
         self.done = False
+        self.at_the_end = False
         
 
     def reset(
@@ -201,7 +202,7 @@ class ExperimentAnalytes(object):
         self.phis = []
         self.delta_taus = []
         self.done = False           
-
+        self.at_the_end = False
 
     def __str__(self):
         return (
@@ -283,7 +284,8 @@ class ExperimentAnalytes(object):
 
         over_x_lim = (self.positions[-1] + delta_x > self.final_position)
         
-        if over_x_lim.any():
+        if over_x_lim.any() and not self.at_the_end:
+            self.at_the_end = True
             max_time = (self.time_travel[-1][over_x_lim] + \
                         (self.final_position - self.positions[-1][over_x_lim]) * \
                         (self.k(phi)[over_x_lim] + 1)).min()
