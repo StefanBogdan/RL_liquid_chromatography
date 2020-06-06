@@ -84,7 +84,7 @@ def sample(
             Normal(
                 mu, sigma
             )
-            .sample((n_samples,1))
+            .sample((n_samples,))
         )
     else:
         return (
