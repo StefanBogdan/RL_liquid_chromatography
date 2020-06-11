@@ -45,8 +45,8 @@ kwargs = {
     'h' : 0.001,
     'run_time' : 1.
 }
-N = 7
-M = 15
+N = 10
+M = 20
 
 losses_50_50 = np.zeros((N, M, kwargs['num_episodes']))
 test_losses_50_50 = np.zeros((N, M, kwargs['num_episodes']))

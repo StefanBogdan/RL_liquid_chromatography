@@ -38,7 +38,7 @@ kwargs = {
 'baseline' : 0.55,
 'max_norm' : 2.
 }
-N = 6
+N = 8
 M = 50
 # Experiments
 exp_8 = ExperimentAnalytes(k0 = alists[0].k0.values, S = alists[0].S.values, h=0.001, run_time=1.0)
