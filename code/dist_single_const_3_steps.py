@@ -101,9 +101,9 @@ avg_len = np.array([len_8, len_16, len_32])/M
 (
     np.savez_compressed(
         "../results/distribution_single_const_3_steps", 
-        nr_analytes_8=dist_tau_8, 
-        nr_analytes_16=dist_tau_16, 
-        nr_analytes_32=dist_tau_32,
+        nr_analytes_8=dist_8, 
+        nr_analytes_16=dist_16, 
+        nr_analytes_32=dist_32,
         avg_len=avg_len
     )
 )
