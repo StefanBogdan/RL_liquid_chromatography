@@ -1,7 +1,7 @@
 """
 Liquid Chromatography Separation Module
 """
-from typing import Tuple, Iterable, Union
+from typing import Tuple, Iterable, Union, Callable
 import numpy as np
 import pandas as pd
 import torch 
@@ -295,7 +295,8 @@ class Rho(nn.Module):
             hidden: int, 
             in_dim: int = 2, 
             sigma_max: float = .3, 
-            sigma_min: float = .1
+            sigma_min: float = .1,
+            non_linearity: Callable[[torch.Tensor], torch.Tensor] = F.relu
         ) -> None:
         """
         Constructor for PolicyTime torch Module.
@@ -315,6 +316,9 @@ class Rho(nn.Module):
         sigma_max: float
             Maximal standard deviation of the solvent strength search space.
             Default value .2. (max value is 1.0)
+        non_linearity: Callable[[torch.Tensor], torch.Tensor] = relu
+            non_linearity applied after first Linear layer.
+            Initialized to relu.
         """
         super().__init__()
         
@@ -322,6 +326,7 @@ class Rho(nn.Module):
         self.hidden = hidden
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
+        self.non_linearity = non_linearity
 
         self.sig = nn.Sigmoid()
         self.fc_mu_1 = nn.Linear(in_dim, hidden)
@@ -330,8 +335,8 @@ class Rho(nn.Module):
         self.fc_sig_2 = nn.Linear(hidden, n_steps)
           
     def forward(self, x):
-        mu = F.relu(self.fc_mu_1(x))
-        sigma = F.relu(self.fc_sig_1(x))
+        mu = self.non_linearity(self.fc_mu_1(x))
+        sigma = self.non_linearity(self.fc_sig_1(x))
         
         mu = self.sig(self.fc_mu_2(mu)).squeeze(0)
         # limit sigma to be in range (sigma_min; sigma_max)
@@ -345,7 +350,8 @@ class RhoTime(nn.Module):
             hidden: int, 
             in_dim: int = 2, 
             sigma_max: float = .3, 
-            sigma_min: float = .1
+            sigma_min: float = .1,
+            non_linearity: Callable[[torch.Tensor], torch.Tensor] = F.relu
         ) -> None:
         """
         Constructor for PolicyTime torch Module.
@@ -365,6 +371,9 @@ class RhoTime(nn.Module):
         sigma_max: float
             Maximal standard deviation of the solvent strength search space.
             Default value .2. (max value is 1.0)
+        non_linearity: Callable[[torch.Tensor], torch.Tensor] = relu
+            non_linearity applied after first Linear layer.
+            Initialized to relu.
         """
         super().__init__()
         
@@ -372,6 +381,7 @@ class RhoTime(nn.Module):
         self.hidden = hidden
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
+        self.non_linearity = non_linearity
 
         self.sig = nn.Sigmoid()
         self.fc_mu_1 = nn.Linear(in_dim, hidden)
@@ -380,8 +390,8 @@ class RhoTime(nn.Module):
         self.fc_sig_2 = nn.Linear(hidden, 2 * n_steps - 1)
           
     def forward(self, x):
-        mu = F.relu(self.fc_mu_1(x))
-        sigma = F.relu(self.fc_sig_1(x))
+        mu = self.non_linearity(self.fc_mu_1(x))
+        sigma = self.non_linearity(self.fc_sig_1(x))
         
         mu = self.sig(self.fc_mu_2(mu)).squeeze(0)
         # limit sigma to be in range (sigma_min; sigma_max)
@@ -927,9 +937,10 @@ def reinforce_best_iso(
 
 
 def reinforce_gen(
-        alists: Iterable[pd.DataFrame],
         policy: PolicyGeneral, 
         delta_taus: Iterable[float],
+        alists: Iterable[pd.DataFrame] = [],
+        random_alist: pd.DataFrame = None,
         test_alist: pd.DataFrame = None,
         num_episodes: int = 1000, 
         sample_size: int = 10,
@@ -952,14 +963,25 @@ def reinforce_gen(
     """
     Run Reinforcement Learning Generalized Set.
 
-    alists: Iterable[pd.DataFrame]
-        A list with pd.Dataframes for each dataset used to train on. 
     policy: PolicyGeneral
         The policy that learns the optimal values for the solvent
         strength program.
     delta_taus: Iterable[float]
         Iterable list with the points of solvent strength change.
         MUST be the same length as policy.n_steps.
+    alists: Iterable[pd.DataFrame] = []
+        A list with pd.Dataframes for each dataset used to train on. 
+        These are the specific sets that are used often to train on.
+        If nothing given empty list is used.
+        (Note: At least 'alists' or 'random_alist' should be specified.)
+    random_alist: pd.DataFrame = None
+        A dataframe to train on. All the sets are drawn randomly
+        from this dataframe. Number of analytes is in range
+        [min_rand_analytes, max_rand_analytes].
+        (Note: If it is not specified, all analytes from 'alists' are 
+        used as 'random_alist', if you do not want to use a random
+        list set 'rand_prob' = 1.)
+        (Note: At least 'alists' or 'random_alist' should be specified.)
     test_alist: pd.DataFrame = None
         A dataframe with analytes to test on. All the sets are drawn randomly
         from this dataframe. Number of analytes is the same as for training
@@ -988,6 +1010,7 @@ def reinforce_gen(
         The probability to draw a random subset from all the analytes.
         1 - rand_prob is the probability to use a "real" set (provided in
         alists).
+        (Note: it is set to one if 'alists' is [].)
     max_rand_analytes: int = 30
         The maximum number of analytes in the randomly drawn set.
     min_rand_analytes: int = 10
@@ -1025,13 +1048,22 @@ def reinforce_gen(
     losses_test = []
     exps = []
 
+    if len(alists) == 0 and not isinstance(random_alist, pd.DataFrame):
+        raise "'alists' and 'random_alist' cannot be empty at the same time!"
+
+    if len(alists) == 0:
+        rand_prob = 1.
+
     # Make ExperimentAnalytes object for the given analyte sets for time saving purpose
     for alist in alists:
         exps.append(ExperimentAnalytes(k0 = alist.k0.values, S = alist.S.values, h=h, run_time=run_time))
 
     num_exps = len(alists)
 
-    all_analytes = pd.concat(alists, sort=True)[['k0', 'S', 'lnk0']]
+    if isinstance(random_alist, pd.DataFrame):
+        all_analytes = random_alist[['k0', 'S', 'lnk0']]
+    else:
+        all_analytes = pd.concat(alists, sort=True)[['k0', 'S', 'lnk0']]
 
     # Optimizer
     optimizer = optim(policy.parameters(), lr)
