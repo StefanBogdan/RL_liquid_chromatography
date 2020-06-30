@@ -38,7 +38,7 @@ kwargs = {
 'baseline' : 0.55,
 'max_norm' : 2.
 }
-exp = [ExperimentAnalytes(k0 = alists[0].k0.values, S = alists[0].S.values, h=0.001, run_time=1.0),
+exps = [ExperimentAnalytes(k0 = alists[0].k0.values, S = alists[0].S.values, h=0.001, run_time=1.0),
     ExperimentAnalytes(k0 = alists[1].k0.values, S = alists[1].S.values, h=0.001, run_time=1.0),
        ExperimentAnalytes(k0 = alists[2].k0.values, S = alists[2].S.values, h=0.001, run_time=1.0)]
 best_loss_gs = np.zeros((3, 4))
