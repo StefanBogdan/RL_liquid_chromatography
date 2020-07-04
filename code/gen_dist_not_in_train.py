@@ -31,7 +31,7 @@ alists.append(pd.read_csv('../data/Gooding.csv'))
 all_analytes = pd.concat(alists[3:], sort=True).reset_index()[['k0', 'S', 'lnk0']]
 
 kwargs = {
-    'num_episodes' : 25_000, 
+    'num_episodes' : 20_000, 
     'sample_size' : 10,
     'batch_size' : 1, 
     'lr' : .05, 
@@ -77,7 +77,7 @@ dist_ft_16 = np.zeros((N,))
 dist_ft_32 = np.zeros((N,))
 
 for n in range(0, N):
-    delta_taus = np.ones(10) * 1/(10)
+    delta_taus = np.ones(3) * 1/(3)
     print(f"{n}")
     #Policies
     pol = PolicyGeneral(
@@ -155,7 +155,7 @@ for n in range(0, N):
 
 (
     np.savez_compressed(
-        "../results/general_dist_not_in_train", 
+        "../results/general_dist_not_in_train_3", 
         dist_8=dist_8, 
         dist_16=dist_16, 
         dist_32=dist_32, 
