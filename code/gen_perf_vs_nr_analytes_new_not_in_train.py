@@ -48,8 +48,6 @@ M = 30
 
 losses_50_50 = np.zeros((M, N, kwargs['num_episodes']))
 test_losses_50_50 = np.zeros((M, N, kwargs['num_episodes']))
-losses_100 = np.zeros((M, N, kwargs['num_episodes']))
-test_losses_100 = np.zeros((M, N, kwargs['num_episodes']))
 def reinforce_gen_1(
         policy: PolicyGeneral, 
         delta_taus: Iterable[float],
@@ -183,7 +181,7 @@ delta_taus = np.ones(10) * 1/(10)
 for i in range(M):
     alist_train = all_analytes.sample(frac=0.5)
     alist_test = all_analytes.loc[lambda a: ~a.index.isin(alist_train.index.values)]
-    print(f"  {i}")
+    print(f"{i}")
     #Policies
     pol_50_50 = PolicyGeneral(
         phi = nn.Sequential(
@@ -202,23 +200,7 @@ for i in range(M):
             Rho(n_steps=len(delta_taus), hidden=5, in_dim=5, sigma_max=.3, sigma_min=.01),
         )
     )
-    pol_100 = PolicyGeneral(
-        phi = nn.Sequential(
-            PermEqui2_max(2, 5),
-            nn.ELU(inplace=True),
-            PermEqui2_max(5, 5),
-            nn.ELU(inplace=True),
-            PermEqui2_max(5, 5),
-            nn.ELU(inplace=True),
-        ),
-        rho = nn.Sequential(
-            nn.Linear(5, 5),
-            nn.ELU(inplace=True),
-            nn.Linear(5, 5),
-            nn.ELU(inplace=True),
-            Rho(n_steps=len(delta_taus), hidden=5, in_dim=5, sigma_max=.3, sigma_min=.01),
-        )
-    )
+    
     # Run Exp
     loss, loss_test = reinforce_gen_1(
         alists = [alist_train], 
@@ -229,22 +211,11 @@ for i in range(M):
         max_rand_analytes = 40,
         **kwargs
     )
-    loss_100, test = reinforce_gen_1(
-        alists = [all_analytes], 
-        test_alist = all_analytes,
-        policy = pol_100, 
-        delta_taus = delta_taus,
-        min_rand_analytes = 8,
-        max_rand_analytes = 40,
-        **kwargs
-    )
+
 
     losses_50_50[i] = loss
     test_losses_50_50[i] = loss_test
-    losses_100[i] = loss_100
-    test_losses_100[i] = test
+
 
 np.savez_compressed("../results/general_perf_vs_nr_analytes_losses_50_new", losses_50_50=losses_50_50)
 np.savez_compressed("../results/general_perf_vs_nr_analytes_test_losses_50_50_new", test_losses_50_50=test_losses_50_50)
-np.savez_compressed("../results/general_perf_vs_nr_analytes_losses_100_new", losses_100=losses_100)
-np.savez_compressed("../results/general_perf_vs_nr_analytes_test_losses_100_new", test_losses_100=test_losses_100)
