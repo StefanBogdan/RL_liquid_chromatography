@@ -176,7 +176,7 @@ def reinforce_gen_1(
 
 
 
-delta_taus = np.ones(10) * 1/(10)
+delta_taus = np.ones(13) * 1/(3)
 
 for i in range(M):
     alist_train = all_analytes.sample(frac=0.5)
@@ -217,5 +217,5 @@ for i in range(M):
     test_losses_50_50[i] = loss_test
 
 
-np.savez_compressed("../results/general_perf_vs_nr_analytes_losses_50_new", losses_50_50=losses_50_50)
-np.savez_compressed("../results/general_perf_vs_nr_analytes_test_losses_50_50_new", test_losses_50_50=test_losses_50_50)
+np.savez_compressed("../results/general_perf_vs_nr_analytes_losses_50_new_3", losses_50_50=losses_50_50)
+np.savez_compressed("../results/general_perf_vs_nr_analytes_test_losses_50_50_new_3", test_losses_50_50=test_losses_50_50)

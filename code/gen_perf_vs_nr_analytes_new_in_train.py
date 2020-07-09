@@ -176,7 +176,7 @@ def reinforce_gen_1(
 
 
 
-delta_taus = np.ones(10) * 1/(10)
+delta_taus = np.ones(3) * 1/(3)
 
 for i in range(M):
     print(f"{i}")
@@ -213,5 +213,5 @@ for i in range(M):
     losses_100[i] = loss_100
     test_losses_100[i] = test
 
-np.savez_compressed("../results/general_perf_vs_nr_analytes_losses_100_new", losses_100=losses_100)
-np.savez_compressed("../results/general_perf_vs_nr_analytes_test_losses_100_new", test_losses_100=test_losses_100)
+np.savez_compressed("../results/general_perf_vs_nr_analytes_losses_100_new_3", losses_100=losses_100)
+np.savez_compressed("../results/general_perf_vs_nr_analytes_test_losses_100_new_3", test_losses_100=test_losses_100)
