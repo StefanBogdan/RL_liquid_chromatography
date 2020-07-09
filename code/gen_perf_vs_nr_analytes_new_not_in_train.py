@@ -176,7 +176,7 @@ def reinforce_gen_1(
 
 
 
-delta_taus = np.ones(13) * 1/(3)
+delta_taus = np.ones(3) * 1/(3)
 
 for i in range(M):
     alist_train = all_analytes.sample(frac=0.5)
