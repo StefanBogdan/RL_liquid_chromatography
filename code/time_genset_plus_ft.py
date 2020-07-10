@@ -30,8 +30,8 @@ alists.append(pd.read_csv('../data/Gooding.csv'))
 # Parameters
 all_analytes = pd.concat(alists, sort=True).reset_index()[['k0', 'S', 'lnk0']]
 
-kwargs = {
-    'num_episodes' : 20_000, 
+kwargs_gen = {
+    'num_episodes' : 25_000, 
     'sample_size' : 10,
     'batch_size' : 1, 
     'lr' : .05, 
@@ -62,12 +62,26 @@ kwargs_ft = {
     'h': .001,
     'run_time' : 1.  
 }
-N = 20
+
+kwargs_one = {
+    'num_episodes' : 6000,
+    'sample_size' : 10,
+    'lr' : .05,
+    'optim' : torch.optim.SGD,
+    'lr_decay_factor' : .5,
+    'lr_milestones' : 1000,
+    'print_every' : 6001,
+    'baseline' : 0.55,
+    'max_norm' : 2.
+}
+N = 10
+
+delta_taus = np.ones(3) * 1/(3)
 
 # Final Results 
 start_ft = time.perf_counter()
 for n in range(0, N):
-    delta_taus = np.ones(3) * 1/(3)
+    
     print(f"{n}")
     #Policies
     pol = PolicyGeneral(
@@ -94,7 +108,7 @@ for n in range(0, N):
         test_alist = None,
         policy = pol, 
         delta_taus = delta_taus, 
-        **kwargs
+        **kwargs_gen
     )
 
     mu_32, _ = pol.forward(torch.tensor(alists[2][['S', 'lnk0']].values, dtype=torch.float32))
@@ -138,15 +152,69 @@ for n in range(0, N):
         test_alist = None,
         policy = pol, 
         delta_taus = delta_taus, 
-        **kwargs
+        **kwargs_gen
     )
 
 end = time.perf_counter()
-gen_time = np.array([end - start, end_ft - start_ft])/N
+sigma_max = 0.3
+
+
+exp= ExperimentAnalytes(k0 = alists[2].k0.values, S = alists[2].S.values, h=0.001, run_time=1.0)
+
+
+########### three n_step
+loss = 3.
+# Grid Search
+print("Grid Search 3")
+start_gs_3 = time.perf_counter()
+for phi_1 in np.linspace(0, 1, 100):
+    for phi_2 in np.linspace(0, 1, 100):
+        for phi_3 in np.linspace(0, 1, 100):
+            exp.reset()
+            exp.run_all([phi_1, phi_2, phi_3], delta_taus)
+            if exp.loss() < loss:
+                loss = exp.loss()
+                best_3 = [phi_1, phi_2, phi_3]
+end_gs_3 = time.perf_counter()
+best_loss_gs[iterat, 2] = loss
+
+# RL
+print("RL 3")
+start_rl_3 = time.perf_counter()
+for n in range(N):
+    pol = PolicySingle(len(delta_taus), sigma_max = sigma_max)
+    reinforce_one_set(
+            exp, 
+            pol, 
+            delta_taus=delta_taus, 
+            **kwargs_one
+        )
+end_rl_3 = time.perf_counter()
+
+# RL
+print("RL 3")
+start_rl_tau = time.perf_counter()
+for n in range(N):
+    pol = PolicySingleTime(len(delta_taus), sigma_max = sigma_max)
+    reinforce_delta_tau(
+            exp, 
+            pol, 
+            **kwargs_one
+        )
+end_rl_tau = time.perf_counter()
+
+
+
+rl_time_ms = (end_rl_3 - start_rl_3)/N
+rl_time_tau_ms = (end_rl_tau - start_rl_tau)/N
+gen_set_ms = (end - start)/N
+fine_tune = (end_ft - start_ft)/N - gen_set_ms
+grid_search_time_ms = end_gs_3 - start_gs_3
+times = np.array([rl_time_ms, rl_time_tau_ms, gen_set_ms, fine_tune, grid_search_time_ms])
 
 (
     np.savetxt(
-        "../results/time_genset_plus_ft.txt",
-        gen_time
+        "../results/time_genset_plus_ft_new.txt",
+        times
         )
 )
