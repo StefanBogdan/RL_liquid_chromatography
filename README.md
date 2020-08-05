@@ -1,4 +1,7 @@
 # RL_liquid_chromatography
-Thesis on Liquid Chromatography using Reinforcement Learning.
+Thesis Project on _spatial_ Liquid Chromatography Optimization using Reinforcement Learning.
 
-**Overleaf page**: https://www.overleaf.com/1665728446qnszfgdbxdkr
+----
+<div align="center">Abstract</div>
+Separating a mixture into its basic compounds in a fast and efficient way is currently attainable by the use of liquid chromatography (LC). The research done in this field today is mainly focused on the _temporal_ LC separation that is based on optimizing a single mixture at a time. This thesis focuses on how _spatial_ LC separation can be optimized through the use of reinforcement learning. This optimization is done by finding a piece-wise constant function as the solvent strength _program_ that results in a good spatial separation. Two methods were investigated in this thesis: the first method is based on a single mixture at a time, and the second method generalizes over any mixture. The single mixture model is based on the REINFORCE algorithm, whereas the generalized model makes use of the _DeepSets_ neural network combined with the REINFORCE algorithm. Both methods showed satisfactory results on the datasets used in this thesis, and both of them require short time to train (\\(\approx\\) 1.5 and 7 minutes respectively). The generalization method is more versatile and requires no additional time for new mixtures. Fine tuning the generalization method yields close to global minimum solutions with a high probability (0.1-0.4 on the datasets used in this thesis) for the defined shape of the program used. Additionally it was observed that fine tuning has no significant difference in training time from the single mixture method.
+-----
