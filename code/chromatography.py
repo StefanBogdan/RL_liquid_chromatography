@@ -62,7 +62,7 @@ def overlap_error(
         sigma: np.ndarray
     ) -> np.float64:
     """
-    Compute the overlaping error of the analytes.
+    Compute the average overlaping error of the all two neaby analytes.
     
     Parameters
     ----------
@@ -74,7 +74,7 @@ def overlap_error(
     Returns
     -------
     np.float64
-        The overlaping error of all the analytes.
+        The average overlaping error of all the analytes.
     """
 
 
@@ -214,16 +214,24 @@ class ExperimentAnalytes(object):
             f"Last time_travel: {self.time_travel[-1]}\n" +
             f"Last positions: {self.positions[-1]}\n" +
             f"final_position: {self.final_position}\n" +
-            f"grad: {self.grad}\n" +
             f"phis: {self.phis}\n" +
             f"delta_taus: {self.delta_taus}\n" +
             f"done: {self.done}"
         )
     
         
-    def k(self, phi):
+    def k(self, phi: float):
         """
         Compute retention factor k for a given phi.
+
+        Parameters
+        ----------
+        phi: float
+            solvent strength value
+
+        Returns
+        -------
+        k value of all the analytes under the 'phi' solvent strength.
         """
         
         return (10 ** (-phi * self.S)) * self.k0
@@ -231,31 +239,57 @@ class ExperimentAnalytes(object):
 
     @property
     def even_space_positions(self):
+        '''
+        Compute the position for the even spaced analytes.
+        '''
+
         return np.linspace(0, self.final_position, self.n_analytes + 1)[1:]
 
 
     @property
     def sig(self):
         """
+        Standard deviation of the Band-Broadening Effect.
         Compute second Gaussian moment for the analytes.
         """
         
         return self.positions[-1] * np.sqrt(self.h)
     
     
-    def intersection_time(self, phi, delta_tau_phi):
+    def intersection_time(self, phi: float, delta_tau_phi: float):
         """
         Compute time needed for the analytes to reach 
         the new solvent for isocratic gradient function.
+
+        Parameters
+        ----------
+        phi: float
+            solvent strength value
+        delta_tau_phi: float
+            time interval for the 'phi' solvent strength.
+
+        Returns
+        -------
+        travel time in the 'phi' solvent strength for each analyte.
         """
+
         return delta_tau_phi * (1 + self.k(phi)) / self.k(phi)
     
     
-    def x(self, phi, delta_tau):
+    def x(self, phi:float, delta_tau):
         """
         Compute distance traveled by the analytes for a 
-        given solvent and time interval,
-        for isocratic gradient function.
+        given solvent and travel time interval for each analyte.
+        Parameters
+        ----------
+        phi: float
+            solvent strength value
+        delta_tau: np.array
+            travel time of each analyte
+
+        Returns
+        -------
+        travel distance of each analyte
         """
         
         return delta_tau /(self.k(phi) + 1)
@@ -266,6 +300,18 @@ class ExperimentAnalytes(object):
         Compute Time and Distance traveled by each analyte.
         Update Distance and Time traveled by each analyte.
         Isocratic gradient function.
+
+        Parameters
+        ----------
+        phi: float
+            solvent strength value
+        delta_tau_phi: float
+            time interval for the 'phi' solvent strength.
+
+        Returns
+        -------
+        True if tone analyte arrived at the end of the column or
+        if 'run_time' limit achieved, and False otherwise.
         """
 
 
@@ -277,8 +323,10 @@ class ExperimentAnalytes(object):
         # and  delta taus respectively
         self.phis.append(phi)
         self.delta_taus.append(delta_tau_phi)
+
         # Compute the interval of time needed to intersect with the next phi.
         intersect_time = self.intersection_time(phi, delta_tau_phi)
+
         # Compute the distance Traveled until the intersection.
         delta_x = self.x(phi, intersect_time)
 
@@ -314,6 +362,15 @@ class ExperimentAnalytes(object):
     def print_analytes(self, title="Solvent Gradient Function", angle=50, rc=(13, 10)):
         """
         Plot the dinamics of the analytes for the experiment.
+
+        Parameters
+        ----------
+        title: str
+            Title of the Figure
+        angle: int
+            angle of the 'phi' values displayed
+        rc: 
+            matplotlib rc parameter, i.e. figure size.
         """
 
         plt.rcParams['figure.figsize'] = rc
@@ -366,7 +423,7 @@ class ExperimentAnalytes(object):
 
     def run_all(self, phis, delta_taus):
         """
-            
+            Run all steps of the experiment.
         """
         
         if len(phis) != len(delta_taus):
