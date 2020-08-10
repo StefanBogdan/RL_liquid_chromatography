@@ -1213,7 +1213,7 @@ def reinforce_single_from_gen(
 
     Returns
     -------
-    (losses, best_program, mus, sigmas)
+    (losses, best_program, mus, sigmas, rho)
     losses: np.ndarray
         Expected loss of the action distribution over the whole learning
         process.
@@ -1225,6 +1225,8 @@ def reinforce_single_from_gen(
         Mus change over the learning process. its shape is (num_episodes, policy.n_split)
     sigmas: np.ndarray
         Sigmas change over the learning process. its shape is (num_episodes, policy.n_split)
+    rho: nn.Module
+        the new rho neural network.
     """
 
     encoding = (policy.phi(torch.tensor(alist[['S', 'lnk0']].values, dtype=torch.float32))).mean(0, keepdim=True).detach()
@@ -1297,7 +1299,7 @@ def reinforce_single_from_gen(
         # Adjust learning rate
         scheduler.step()
         
-    return np.array(losses), best_program.numpy(),  np.array(epoch_mus), np.array(epoch_sigmas)
+    return np.array(losses), best_program.numpy(),  np.array(epoch_mus), np.array(epoch_sigmas), policy
 
 def reinforce_delta_tau_gen(
         alists: Iterable[pd.DataFrame],
@@ -1535,6 +1537,8 @@ def reinforce_single_from_delta_tau_gen(
         Mus change over the learning process. its shape is (num_episodes, policy.n_split)
     sigmas: np.ndarray
         Sigmas change over the learning process. its shape is (num_episodes, policy.n_split)
+    rho: nn.Module
+        the new rho neural network.
     """
 
     encoding = (policy.phi(torch.tensor(alist[['S', 'lnk0']].values, dtype=torch.float32))).mean(0, keepdim=True).detach()
@@ -1613,4 +1617,4 @@ def reinforce_single_from_delta_tau_gen(
         # Adjust learning rate
         scheduler.step()
         
-    return np.array(losses), best_program,  np.array(epoch_mus), np.array(epoch_sigmas)
+    return np.array(losses), best_program,  np.array(epoch_mus), np.array(epoch_sigmas), policy

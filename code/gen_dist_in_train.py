@@ -122,21 +122,21 @@ for n in range(0, N):
     dist_32[n] = exp_32.loss()
     
         
-    _,_,mu_8,_ = reinforce_single_from_gen(
+    _,_,mu_8,_,_ = reinforce_single_from_gen(
         alist = alists[0], 
         policy= pol, 
         delta_taus= delta_taus,   
         **kwargs_ft
     )
     
-    _,_,mu_16,_ = reinforce_single_from_gen(
+    _,_,mu_16,_,_ = reinforce_single_from_gen(
         alist = alists[1], 
         policy= pol, 
         delta_taus= delta_taus,   
         **kwargs_ft
     )
     
-    _,_,mu_32,_ = reinforce_single_from_gen(
+    _,_,mu_32,_,_ = reinforce_single_from_gen(
         alist = alists[2], 
         policy= pol, 
         delta_taus= delta_taus,   
